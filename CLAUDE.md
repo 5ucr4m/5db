@@ -92,3 +92,10 @@ keyed by primary key or, when there is none, by `ctid`.
   not in Biome's grammar yet.
 - **`russh` pulls `aws-lc-sys`**, which needs NASM on Windows and CMake
   everywhere. That is why the release workflow has those steps.
+- **The updater signing key cannot be replaced.** The public half is in
+  `tauri.conf.json` and the private half is the `TAURI_SIGNING_PRIVATE_KEY`
+  repository secret. An installed app only accepts updates signed by that exact
+  key, so losing it means every existing install is stuck on its current
+  version and has to be reinstalled by hand. Keep a copy somewhere durable, and
+  never rotate it without shipping a release that already carries the new public
+  key.
