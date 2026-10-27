@@ -1,0 +1,10 @@
+#!/bin/sh
+# Checks what can be checked without Docker. Installed by `pnpm install`
+# through the `prepare` script, which points core.hooksPath here.
+# Skip with `git commit --no-verify`.
+set -e
+echo "pre-commit: biome, tsc, vitest, rustfmt, clippy"
+pnpm lint
+pnpm typecheck
+pnpm test:unit
+pnpm lint:rust

@@ -89,6 +89,10 @@ pnpm test           # check + backend + e2e
 
 `pnpm fmt` formats everything (Biome for TypeScript, rustfmt for Rust); `pnpm lint` and `pnpm lint:rust` check without writing.
 
+`pnpm install` points `core.hooksPath` at `.githooks`, so a commit runs
+everything in `pnpm check` plus the Rust lints first. `git commit --no-verify`
+skips it.
+
 ### Build
 
 ```sh
