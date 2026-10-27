@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 // End-to-end flows against the docker fixtures (`pnpm db:up`).
 // Tests share one bridge, so each starts from an empty connection list.
@@ -8,7 +8,11 @@ const PG_URL = "postgres://fivedb:fivedb@127.0.0.1:54329/shop?sslmode=disable";
 const REDIS_URL = "redis://:fivedb@127.0.0.1:63799/0";
 
 async function rpc<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const res = await fetch(BRIDGE, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method, params }) });
+  const res = await fetch(BRIDGE, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ method, params }),
+  });
   const body = (await res.json()) as { ok: boolean; data: T; error?: { message: string } };
   if (!body.ok) throw new Error(body.error?.message);
   return body.data;
@@ -20,7 +24,10 @@ async function resetConnections() {
 }
 
 async function addConnection(page: Page, url: string, name: string, env?: string) {
-  await page.getByRole("button", { name: /new connection|add your first connection/i }).first().click();
+  await page
+    .getByRole("button", { name: /new connection|add your first connection/i })
+    .first()
+    .click();
   await page.getByPlaceholder(/postgres:\/\/user|redis:\/\/:password/).fill(url);
   await page.getByRole("textbox", { name: "Name", exact: true }).fill(name);
   if (env) await page.getByRole("dialog").getByRole("button", { name: env, exact: true }).click();
@@ -38,11 +45,28 @@ test.beforeEach(async ({ page }) => {
   await resetConnections();
   // Restore fixture rows that edit tests change.
   const pg = await rpc<{ id: string }>("connections.save", {
-    name: "fixture", kind: "postgres", host: "127.0.0.1", port: 54329, user: "fivedb", password: "fivedb", database: "shop", sslMode: "disable",
+    name: "fixture",
+    kind: "postgres",
+    host: "127.0.0.1",
+    port: 54329,
+    user: "fivedb",
+    password: "fivedb",
+    database: "shop",
+    sslMode: "disable",
   });
-  await rpc("pg.execute", { connectionId: pg.id, record: false, sql: "UPDATE customers SET name = 'Bruno Souza' WHERE id = 1; DELETE FROM products WHERE title LIKE 'E2E%';" });
+  await rpc("pg.execute", {
+    connectionId: pg.id,
+    record: false,
+    sql: "UPDATE customers SET name = 'Bruno Souza' WHERE id = 1; DELETE FROM products WHERE title LIKE 'E2E%';",
+  });
   await rpc("connections.delete", { id: pg.id });
-  const rd = await rpc<{ id: string }>("connections.save", { name: "fixture", kind: "redis", host: "127.0.0.1", port: 63799, password: "fivedb" });
+  const rd = await rpc<{ id: string }>("connections.save", {
+    name: "fixture",
+    kind: "redis",
+    host: "127.0.0.1",
+    port: 63799,
+    password: "fivedb",
+  });
   await rpc("redis.command", { connectionId: rd.id, args: ["HSET", "user:7", "name", "User7"] });
   await rpc("redis.command", { connectionId: rd.id, args: ["DEL", "e2e:temp"] });
   await rpc("connections.delete", { id: rd.id });

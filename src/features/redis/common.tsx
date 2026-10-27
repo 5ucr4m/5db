@@ -13,7 +13,13 @@ export const TYPE_META: Record<string, { label: string; className: string }> = {
 export function TypeBadge({ type, className }: { type: string; className?: string }) {
   const m = TYPE_META[type] ?? { label: type.slice(0, 4).toUpperCase(), className: "text-muted bg-raised border-line" };
   return (
-    <span className={cx("inline-flex h-[17px] w-[38px] shrink-0 items-center justify-center rounded border font-mono text-[9.5px] font-bold tracking-wide", m.className, className)}>
+    <span
+      className={cx(
+        "inline-flex h-[17px] w-[38px] shrink-0 items-center justify-center rounded border font-mono text-[9.5px] font-bold tracking-wide",
+        m.className,
+        className,
+      )}
+    >
       {m.label}
     </span>
   );
@@ -45,6 +51,8 @@ export function formatReply(v: unknown, indent = ""): string {
 }
 
 const WRITE_COMMANDS = new Set(
-  "SET SETEX PSETEX SETNX MSET MSETNX GETSET GETDEL APPEND INCR INCRBY INCRBYFLOAT DECR DECRBY DEL UNLINK RENAME RENAMENX EXPIRE PEXPIRE EXPIREAT PEXPIREAT PERSIST HSET HMSET HSETNX HDEL HINCRBY HINCRBYFLOAT LPUSH RPUSH LPUSHX RPUSHX LPOP RPOP LSET LREM LTRIM LINSERT LMOVE RPOPLPUSH SADD SREM SPOP SMOVE ZADD ZREM ZINCRBY ZPOPMIN ZPOPMAX ZREMRANGEBYSCORE ZREMRANGEBYRANK XADD XDEL XTRIM FLUSHDB FLUSHALL RESTORE COPY MOVE SWAPDB JSON.SET JSON.DEL".split(" "),
+  "SET SETEX PSETEX SETNX MSET MSETNX GETSET GETDEL APPEND INCR INCRBY INCRBYFLOAT DECR DECRBY DEL UNLINK RENAME RENAMENX EXPIRE PEXPIRE EXPIREAT PEXPIREAT PERSIST HSET HMSET HSETNX HDEL HINCRBY HINCRBYFLOAT LPUSH RPUSH LPUSHX RPUSHX LPOP RPOP LSET LREM LTRIM LINSERT LMOVE RPOPLPUSH SADD SREM SPOP SMOVE ZADD ZREM ZINCRBY ZPOPMIN ZPOPMAX ZREMRANGEBYSCORE ZREMRANGEBYRANK XADD XDEL XTRIM FLUSHDB FLUSHALL RESTORE COPY MOVE SWAPDB JSON.SET JSON.DEL".split(
+    " ",
+  ),
 );
 export const isWriteCommand = (line: string) => WRITE_COMMANDS.has(line.trim().split(/\s+/)[0]?.toUpperCase() ?? "");

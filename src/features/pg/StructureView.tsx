@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
 import { ArrowUpRight, KeyRound, Link2 } from "lucide-react";
+import type { ReactNode } from "react";
 import { Badge, cx } from "../../components/ui";
 import { familyColor, familyGlyph, formatBytes, formatInt, typeFamily } from "../../lib/format";
 import type { TableStructure } from "../../lib/types";
@@ -21,13 +21,18 @@ const td = "border-b border-line/60 px-3 py-2 align-top";
 
 export function StructureView({ s, onOpenTable }: { s: TableStructure; onOpenTable: (schema: string, table: string) => void }) {
   const fkByColumn = new Map<string, { schema: string; table: string; column: string }>();
-  for (const fk of s.foreignKeys) fk.columns.forEach((c, i) => fkByColumn.set(c, { schema: fk.refSchema, table: fk.refTable, column: fk.refColumns[i] }));
+  for (const fk of s.foreignKeys)
+    fk.columns.forEach((c, i) => {
+      fkByColumn.set(c, { schema: fk.refSchema, table: fk.refTable, column: fk.refColumns[i] });
+    });
 
   return (
     <div className="selectable h-full overflow-auto px-8 py-6">
       <div className="mb-6 flex flex-wrap items-end gap-x-8 gap-y-2">
         <div>
-          <div className="text-2xs font-semibold tracking-[0.14em] text-faint uppercase">{s.kind === "table" ? "Table" : s.kind === "view" ? "View" : s.kind === "matview" ? "Materialized view" : "Foreign table"}</div>
+          <div className="text-2xs font-semibold tracking-[0.14em] text-faint uppercase">
+            {s.kind === "table" ? "Table" : s.kind === "view" ? "View" : s.kind === "matview" ? "Materialized view" : "Foreign table"}
+          </div>
           <h2 className="font-display text-2xl font-bold tracking-tight">
             <span className="text-faint">{s.schema}.</span>
             {s.name}
@@ -74,7 +79,11 @@ export function StructureView({ s, onOpenTable }: { s: TableStructure; onOpenTab
                         {c.name}
                         {c.isPk && <KeyRound className="size-3 text-warn" />}
                         {fk && (
-                          <button className="inline-flex items-center gap-0.5 rounded px-1 font-sans text-[11px] font-normal text-info hover:bg-info/10" onClick={() => onOpenTable(fk.schema, fk.table)}>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-0.5 rounded px-1 font-sans text-[11px] font-normal text-info hover:bg-info/10"
+                            onClick={() => onOpenTable(fk.schema, fk.table)}
+                          >
                             <Link2 className="size-3" /> {fk.table}.{fk.column}
                           </button>
                         )}
@@ -123,7 +132,9 @@ export function StructureView({ s, onOpenTable }: { s: TableStructure; onOpenTab
                         <Badge>{i.method}</Badge>
                       </span>
                     </td>
-                    <td className={cx(td, "font-mono text-[11.5px] text-muted")}>{i.definition.replace(/^CREATE (UNIQUE )?INDEX \S+ ON /, "")}</td>
+                    <td className={cx(td, "font-mono text-[11.5px] text-muted")}>
+                      {i.definition.replace(/^CREATE (UNIQUE )?INDEX \S+ ON /, "")}
+                    </td>
                     <td className={cx(td, "text-right font-mono text-xs tabular")}>{formatBytes(i.sizeBytes)}</td>
                   </tr>
                 ))}
@@ -138,6 +149,7 @@ export function StructureView({ s, onOpenTable }: { s: TableStructure; onOpenTab
           <div className="flex flex-col gap-1.5">
             {s.foreignKeys.map((fk) => (
               <button
+                type="button"
                 key={fk.name}
                 onClick={() => onOpenTable(fk.refSchema, fk.refTable)}
                 className="group flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-left font-mono text-xs hover:border-iris-line"
@@ -160,6 +172,7 @@ export function StructureView({ s, onOpenTable }: { s: TableStructure; onOpenTab
           <div className="flex flex-col gap-1.5">
             {s.referencedBy.map((r) => (
               <button
+                type="button"
                 key={`${r.schema}.${r.table}.${r.name}`}
                 onClick={() => onOpenTable(r.schema, r.table)}
                 className="group flex items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-left font-mono text-xs hover:border-iris-line"
@@ -201,7 +214,10 @@ export function StructureView({ s, onOpenTable }: { s: TableStructure; onOpenTab
       {s.triggers.length > 0 && (
         <Section title="Triggers" count={s.triggers.length}>
           {s.triggers.map((t) => (
-            <pre key={t.name} className="mb-1.5 rounded-lg border border-line bg-panel p-3 font-mono text-[11.5px] whitespace-pre-wrap text-muted">
+            <pre
+              key={t.name}
+              className="mb-1.5 rounded-lg border border-line bg-panel p-3 font-mono text-[11.5px] whitespace-pre-wrap text-muted"
+            >
               {t.definition}
               {!t.enabled && <span className="ml-2 text-warn">(disabled)</span>}
             </pre>

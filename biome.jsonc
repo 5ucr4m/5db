@@ -1,0 +1,50 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  // src/styles.css is excluded: Tailwind 4 at-rules (@theme, @custom-variant)
+  // are not in Biome's CSS grammar yet.
+  "files": {
+    "includes": ["src/**", "e2e/**", "*.ts", "*.mjs", "!src/styles.css"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 140
+  },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "arrowParentheses": "always" }
+  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "complexity": {
+        // `onClick={() => (close(), save())}` is used deliberately throughout.
+        "noCommaOperator": "off",
+        // Tailwind's `!` modifier.
+        "noImportantStyles": "off"
+      },
+      "a11y": {
+        // Dialogs focus their first field on open, on purpose.
+        "noAutofocus": "off",
+        // `<Field>` wraps its control in the label, which the rule cannot see
+        // through `children`.
+        "noLabelWithoutControl": "off",
+        // Real debt: rows and cells that are clickable divs. Visible, not blocking.
+        "noStaticElementInteractions": "warn",
+        "useKeyWithClickEvents": "warn",
+        "useSemanticElements": "warn",
+        "noNoninteractiveTabindex": "warn"
+      },
+      "correctness": {
+        // Several effects omit deps on purpose; worth reading, not worth failing on.
+        "useExhaustiveDependencies": "warn"
+      },
+      "suspicious": {
+        "noArrayIndexKey": "warn",
+        "noAssignInExpressions": "warn"
+      }
+    }
+  }
+}

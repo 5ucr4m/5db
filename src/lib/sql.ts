@@ -23,7 +23,13 @@ export function splitStatements(sql: string): StatementRange[] {
     const raw = sql.slice(start, end);
     const lead = raw.length - raw.trimStart().length;
     const text = raw.trim();
-    if (text && !/^(--[^\n]*\n?\s*)+$/.test(text + "\n")) out.push({ from: start + lead, to: start + lead + text.length, text });
+    // Comments and bare semicolons are empty queries: the server accepts them
+    // but they only add a stray empty result set.
+    const meaningful = text
+      .replace(/--[^\n]*/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/[;\s]/g, "");
+    if (meaningful) out.push({ from: start + lead, to: start + lead + text.length, text });
   };
   while (i < n) {
     const c = sql[i];
@@ -73,7 +79,11 @@ export function statementAt(sql: string, offset: number): StatementRange | null 
 /** Statements worth a confirmation on production connections. */
 export function destructiveReason(sql: string): string | null {
   for (const { text } of splitStatements(sql)) {
-    const s = text.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, " ").replace(/\s+/g, " ").trim().toUpperCase();
+    const s = text
+      .replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toUpperCase();
     if (/^DROP\s/.test(s)) return "drops an object";
     if (/^TRUNCATE\s/.test(s)) return "truncates a table";
     if (/^ALTER\s+TABLE\s.+\sDROP\s/.test(s)) return "drops a column or constraint";

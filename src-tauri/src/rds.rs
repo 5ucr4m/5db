@@ -3,10 +3,10 @@
 
 use std::time::{Duration, Instant};
 
-use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use redis::Value as RV;
+use redis::aio::{ConnectionManager, ConnectionManagerConfig};
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::error::{AppError, AppResult};
 use crate::store::ConnectionConfig;
@@ -47,9 +47,12 @@ pub async fn connect(cfg: &ConnectionConfig, db: i64) -> AppResult<RedisSession>
         .set_connection_timeout(Some(Duration::from_secs(8)))
         .set_response_timeout(Some(Duration::from_secs(30)))
         .set_number_of_retries(2);
-    let conn = tokio::time::timeout(Duration::from_secs(10), client.get_connection_manager_with_config(config))
-        .await
-        .map_err(|_| AppError::msg("Timed out after 10s while connecting. Check host, port and firewall."))??;
+    let conn = tokio::time::timeout(
+        Duration::from_secs(10),
+        client.get_connection_manager_with_config(config),
+    )
+    .await
+    .map_err(|_| AppError::msg("Timed out after 10s while connecting. Check host, port and firewall."))??;
     Ok(RedisSession { conn })
 }
 
@@ -59,10 +62,17 @@ pub async fn test_connection(cfg: &ConnectionConfig) -> AppResult<Value> {
     let mut c = s.conn.clone();
     let pong: String = redis::cmd("PING").query_async(&mut c).await?;
     let latency = started.elapsed().as_secs_f64() * 1000.0;
-    let info: String = redis::cmd("INFO").arg("server").query_async(&mut c).await.unwrap_or_default();
+    let info: String = redis::cmd("INFO")
+        .arg("server")
+        .query_async(&mut c)
+        .await
+        .unwrap_or_default();
     let version = info
         .lines()
-        .find_map(|l| l.strip_prefix("redis_version:").or_else(|| l.strip_prefix("valkey_version:")))
+        .find_map(|l| {
+            l.strip_prefix("redis_version:")
+                .or_else(|| l.strip_prefix("valkey_version:"))
+        })
         .unwrap_or("unknown")
         .trim()
         .to_string();
@@ -134,12 +144,24 @@ fn default_count() -> usize {
 pub async fn scan(sess: &RedisSession, req: ScanRequest) -> AppResult<Value> {
     let mut c = sess.conn.clone();
     let started = Instant::now();
-    let mut cursor = if req.cursor.is_empty() { "0".to_string() } else { req.cursor.clone() };
-    let pattern = req.pattern.clone().filter(|p| !p.is_empty()).unwrap_or_else(|| "*".into());
+    let mut cursor = if req.cursor.is_empty() {
+        "0".to_string()
+    } else {
+        req.cursor.clone()
+    };
+    let pattern = req
+        .pattern
+        .clone()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "*".into());
     let mut keys: Vec<String> = Vec::new();
     loop {
         let mut cmd = redis::cmd("SCAN");
-        cmd.arg(&cursor).arg("MATCH").arg(&pattern).arg("COUNT").arg(req.count.max(100));
+        cmd.arg(&cursor)
+            .arg("MATCH")
+            .arg(&pattern)
+            .arg("COUNT")
+            .arg(req.count.max(100));
         if let Some(t) = req.key_type.as_ref().filter(|t| !t.is_empty()) {
             cmd.arg("TYPE").arg(t);
         }
@@ -155,7 +177,11 @@ pub async fn scan(sess: &RedisSession, req: ScanRequest) -> AppResult<Value> {
     for k in &keys {
         pipe.cmd("TYPE").arg(k).cmd("PTTL").arg(k);
     }
-    let meta: Vec<RV> = if keys.is_empty() { vec![] } else { pipe.query_async(&mut c).await? };
+    let meta: Vec<RV> = if keys.is_empty() {
+        vec![]
+    } else {
+        pipe.query_async(&mut c).await?
+    };
     let items: Vec<Value> = keys
         .iter()
         .enumerate()
@@ -176,17 +202,40 @@ const PREVIEW: isize = 1000;
 
 pub async fn get_key(sess: &RedisSession, key: &str) -> AppResult<Value> {
     let mut c = sess.conn.clone();
-    let (t, ttl): (String, i64) = redis::pipe().cmd("TYPE").arg(key).cmd("PTTL").arg(key).query_async(&mut c).await?;
+    let (t, ttl): (String, i64) = redis::pipe()
+        .cmd("TYPE")
+        .arg(key)
+        .cmd("PTTL")
+        .arg(key)
+        .query_async(&mut c)
+        .await?;
     if t == "none" {
-        return Err(AppError::msg(format!("Key \"{key}\" does not exist anymore. It may have expired.")));
+        return Err(AppError::msg(format!(
+            "Key \"{key}\" does not exist anymore. It may have expired."
+        )));
     }
-    let memory: Option<i64> = redis::cmd("MEMORY").arg("USAGE").arg(key).query_async(&mut c).await.ok();
-    let encoding: Option<String> = redis::cmd("OBJECT").arg("ENCODING").arg(key).query_async(&mut c).await.ok();
+    let memory: Option<i64> = redis::cmd("MEMORY")
+        .arg("USAGE")
+        .arg(key)
+        .query_async(&mut c)
+        .await
+        .ok();
+    let encoding: Option<String> = redis::cmd("OBJECT")
+        .arg("ENCODING")
+        .arg(key)
+        .query_async(&mut c)
+        .await
+        .ok();
 
     let (length, value): (i64, Value) = match t.as_str() {
         "string" => {
             let len: i64 = redis::cmd("STRLEN").arg(key).query_async(&mut c).await?;
-            let v: RV = redis::cmd("GETRANGE").arg(key).arg(0).arg(1_048_575).query_async(&mut c).await?;
+            let v: RV = redis::cmd("GETRANGE")
+                .arg(key)
+                .arg(0)
+                .arg(1_048_575)
+                .query_async(&mut c)
+                .await?;
             (len, json!(s(&v)))
         }
         "hash" => {
@@ -194,8 +243,13 @@ pub async fn get_key(sess: &RedisSession, key: &str) -> AppResult<Value> {
             let mut fields = Vec::new();
             let mut cursor = "0".to_string();
             loop {
-                let (next, batch): (String, Vec<RV>) =
-                    redis::cmd("HSCAN").arg(key).arg(&cursor).arg("COUNT").arg(500).query_async(&mut c).await?;
+                let (next, batch): (String, Vec<RV>) = redis::cmd("HSCAN")
+                    .arg(key)
+                    .arg(&cursor)
+                    .arg("COUNT")
+                    .arg(500)
+                    .query_async(&mut c)
+                    .await?;
                 for pair in batch.chunks(2) {
                     if pair.len() == 2 {
                         fields.push(json!({ "field": s(&pair[0]), "value": s(&pair[1]) }));
@@ -210,7 +264,12 @@ pub async fn get_key(sess: &RedisSession, key: &str) -> AppResult<Value> {
         }
         "list" => {
             let len: i64 = redis::cmd("LLEN").arg(key).query_async(&mut c).await?;
-            let items: Vec<RV> = redis::cmd("LRANGE").arg(key).arg(0).arg(PREVIEW - 1).query_async(&mut c).await?;
+            let items: Vec<RV> = redis::cmd("LRANGE")
+                .arg(key)
+                .arg(0)
+                .arg(PREVIEW - 1)
+                .query_async(&mut c)
+                .await?;
             (len, Value::Array(items.iter().map(|v| json!(s(v))).collect()))
         }
         "set" => {
@@ -218,8 +277,13 @@ pub async fn get_key(sess: &RedisSession, key: &str) -> AppResult<Value> {
             let mut members = Vec::new();
             let mut cursor = "0".to_string();
             loop {
-                let (next, batch): (String, Vec<RV>) =
-                    redis::cmd("SSCAN").arg(key).arg(&cursor).arg("COUNT").arg(500).query_async(&mut c).await?;
+                let (next, batch): (String, Vec<RV>) = redis::cmd("SSCAN")
+                    .arg(key)
+                    .arg(&cursor)
+                    .arg("COUNT")
+                    .arg(500)
+                    .query_async(&mut c)
+                    .await?;
                 members.extend(batch.iter().map(|v| json!(s(v))));
                 cursor = next;
                 if cursor == "0" || members.len() as isize >= PREVIEW {
@@ -256,31 +320,37 @@ pub async fn get_key(sess: &RedisSession, key: &str) -> AppResult<Value> {
         }
         "stream" => {
             let len: i64 = redis::cmd("XLEN").arg(key).query_async(&mut c).await?;
-            let entries: Vec<RV> =
-                redis::cmd("XREVRANGE").arg(key).arg("+").arg("-").arg("COUNT").arg(500).query_async(&mut c).await?;
+            let entries: Vec<RV> = redis::cmd("XREVRANGE")
+                .arg(key)
+                .arg("+")
+                .arg("-")
+                .arg("COUNT")
+                .arg(500)
+                .query_async(&mut c)
+                .await?;
             let mut out = Vec::new();
             for e in entries {
-                if let RV::Array(parts) = e {
-                    if parts.len() == 2 {
-                        let id = s(&parts[0]);
-                        let mut fields = Map::new();
-                        match &parts[1] {
-                            RV::Array(kv) => {
-                                for pair in kv.chunks(2) {
-                                    if pair.len() == 2 {
-                                        fields.insert(s(&pair[0]), json!(s(&pair[1])));
-                                    }
+                if let RV::Array(parts) = e
+                    && parts.len() == 2
+                {
+                    let id = s(&parts[0]);
+                    let mut fields = Map::new();
+                    match &parts[1] {
+                        RV::Array(kv) => {
+                            for pair in kv.chunks(2) {
+                                if pair.len() == 2 {
+                                    fields.insert(s(&pair[0]), json!(s(&pair[1])));
                                 }
                             }
-                            RV::Map(kv) => {
-                                for (k, v) in kv {
-                                    fields.insert(s(k), json!(s(v)));
-                                }
-                            }
-                            _ => {}
                         }
-                        out.push(json!({ "id": id, "fields": fields }));
+                        RV::Map(kv) => {
+                            for (k, v) in kv {
+                                fields.insert(s(k), json!(s(v)));
+                            }
+                        }
+                        _ => {}
                     }
+                    out.push(json!({ "id": id, "fields": fields }));
                 }
             }
             (len, Value::Array(out))
@@ -325,7 +395,9 @@ pub async fn command_line(sess: &RedisSession, line: &str) -> AppResult<Value> {
     let args = shell_words::split(line).map_err(|e| AppError::msg(format!("Could not parse the command: {e}")))?;
     let first = args.first().map(|s| s.to_ascii_uppercase()).unwrap_or_default();
     if matches!(first.as_str(), "SUBSCRIBE" | "PSUBSCRIBE" | "MONITOR" | "SSUBSCRIBE") {
-        return Err(AppError::msg(format!("{first} streams forever and is not supported in the console.")));
+        return Err(AppError::msg(format!(
+            "{first} streams forever and is not supported in the console."
+        )));
     }
     command(sess, args).await
 }
@@ -346,13 +418,20 @@ pub async fn info(sess: &RedisSession) -> AppResult<Value> {
             continue;
         }
         if let Some((k, v)) = line.split_once(':') {
-            let sec = sections.entry(current.clone()).or_insert_with(|| Value::Object(Map::new()));
+            let sec = sections
+                .entry(current.clone())
+                .or_insert_with(|| Value::Object(Map::new()));
             if let Value::Object(m) = sec {
                 m.insert(k.to_string(), json!(v));
             }
         }
     }
-    let databases: i64 = match redis::cmd("CONFIG").arg("GET").arg("databases").query_async::<Vec<String>>(&mut c).await {
+    let databases: i64 = match redis::cmd("CONFIG")
+        .arg("GET")
+        .arg("databases")
+        .query_async::<Vec<String>>(&mut c)
+        .await
+    {
         Ok(v) if v.len() == 2 => v[1].parse().unwrap_or(16),
         _ => 16,
     };

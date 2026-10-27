@@ -4,9 +4,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::error::{AppError, AppResult};
@@ -41,10 +41,10 @@ impl AppState {
             return Ok(cfg);
         }
         let mut tunnels = self.tunnels.lock().await;
-        if let Some(t) = tunnels.get(&cfg.id) {
-            if !t.is_closed() {
-                return Ok(ssh::rewrite(&cfg, t));
-            }
+        if let Some(t) = tunnels.get(&cfg.id)
+            && !t.is_closed()
+        {
+            return Ok(ssh::rewrite(&cfg, t));
         }
         let t = Arc::new(ssh::open(&cfg).await?);
         let out = ssh::rewrite(&cfg, &t);
@@ -57,18 +57,21 @@ impl AppState {
         if cfg.kind != "postgres" {
             return Err(AppError::msg("This connection is not a Postgres connection."));
         }
-        let db = database.filter(|d| !d.is_empty()).map(str::to_string).unwrap_or_else(|| cfg.database.clone());
+        let db = database
+            .filter(|d| !d.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| cfg.database.clone());
         let key = format!("{connection_id}\u{0}{db}");
-        if let Some(s) = self.pg.read().await.get(&key) {
-            if !s.is_closed() {
-                return Ok(s.clone());
-            }
+        if let Some(s) = self.pg.read().await.get(&key)
+            && !s.is_closed()
+        {
+            return Ok(s.clone());
         }
         let _guard = self.connecting.lock().await;
-        if let Some(s) = self.pg.read().await.get(&key) {
-            if !s.is_closed() {
-                return Ok(s.clone());
-            }
+        if let Some(s) = self.pg.read().await.get(&key)
+            && !s.is_closed()
+        {
+            return Ok(s.clone());
         }
         let cfg = self.effective(cfg).await?;
         let session = Arc::new(PgSession::open(cfg, db).await?);
@@ -170,7 +173,11 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
         "connections.test" => {
             let cfg: ConnectionConfig = p(&params)?;
             // A throwaway tunnel, closed when the test finishes.
-            let tunnel = if cfg.ssh_enabled { Some(ssh::open(&cfg).await?) } else { None };
+            let tunnel = if cfg.ssh_enabled {
+                Some(ssh::open(&cfg).await?)
+            } else {
+                None
+            };
             let target = match &tunnel {
                 Some(t) => ssh::rewrite(&cfg, t),
                 None => cfg,
@@ -209,7 +216,12 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
         }
         "pg.structure" => {
             let t: TableTarget = p(&params)?;
-            pg::table_structure(&*state.pg(&t.connection_id, t.database.as_deref()).await?, &t.schema, &t.table).await
+            pg::table_structure(
+                &*state.pg(&t.connection_id, t.database.as_deref()).await?,
+                &t.schema,
+                &t.table,
+            )
+            .await
         }
         "pg.rows" => {
             let t: PgTarget = p(&params)?;
@@ -257,7 +269,12 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
             let t: PgTarget = p(&params)?;
             let pid: i32 = p(&params["pid"])?;
             let terminate = params.get("terminate").and_then(Value::as_bool).unwrap_or(false);
-            pg::signal_backend(&*state.pg(&t.connection_id, t.database.as_deref()).await?, pid, terminate).await
+            pg::signal_backend(
+                &*state.pg(&t.connection_id, t.database.as_deref()).await?,
+                pid,
+                terminate,
+            )
+            .await
         }
         "pg.functionDef" => {
             let t: PgTarget = p(&params)?;
@@ -267,7 +284,13 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
         "pg.exportCsv" => {
             let t: TableTarget = p(&params)?;
             let path: String = p(&params["path"])?;
-            pg::export_csv(&*state.pg(&t.connection_id, t.database.as_deref()).await?, &t.schema, &t.table, &path).await
+            pg::export_csv(
+                &*state.pg(&t.connection_id, t.database.as_deref()).await?,
+                &t.schema,
+                &t.table,
+                &path,
+            )
+            .await
         }
 
         // ---- redis -----------------------------------------------------
@@ -328,10 +351,16 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
             Ok(Value::Null)
         }
         "history.clear" => {
-            state.store.clear_history(params.get("connectionId").and_then(Value::as_str))?;
+            state
+                .store
+                .clear_history(params.get("connectionId").and_then(Value::as_str))?;
             Ok(Value::Null)
         }
-        "saved.list" => Ok(json!(state.store.list_saved(params.get("connectionId").and_then(Value::as_str))?)),
+        "saved.list" => Ok(json!(
+            state
+                .store
+                .list_saved(params.get("connectionId").and_then(Value::as_str))?
+        )),
         "saved.save" => {
             let q: SavedQuery = p(&params)?;
             if q.name.trim().is_empty() {

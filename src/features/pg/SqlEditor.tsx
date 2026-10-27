@@ -1,12 +1,22 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
-import { Compartment, EditorState, StateEffect, StateField, type Extension } from "@codemirror/state";
-import { Decoration, EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, placeholder as cmPlaceholder, type DecorationSet } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { PostgreSQL, sql, type SQLNamespace } from "@codemirror/lang-sql";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
-import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from "@codemirror/language";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { PostgreSQL, type SQLNamespace, sql } from "@codemirror/lang-sql";
+import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
+import { Compartment, EditorState, type Extension, StateEffect, StateField } from "@codemirror/state";
+import {
+  placeholder as cmPlaceholder,
+  Decoration,
+  type DecorationSet,
+  drawSelection,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+} from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { statementAt } from "../../lib/sql";
 import type { CompletionTable } from "../../store/app";
 
@@ -37,7 +47,10 @@ const errorField = StateField.define<DecorationSet>({
     deco = deco.map(tr.changes);
     for (const e of tr.effects) {
       if (e.is(setErrorMark)) {
-        deco = e.value && e.value.to > e.value.from ? Decoration.set([Decoration.mark({ class: "cm-error-mark" }).range(e.value.from, e.value.to)]) : Decoration.none;
+        deco =
+          e.value && e.value.to > e.value.from
+            ? Decoration.set([Decoration.mark({ class: "cm-error-mark" }).range(e.value.from, e.value.to)])
+            : Decoration.none;
       }
     }
     if (tr.docChanged) deco = Decoration.none;

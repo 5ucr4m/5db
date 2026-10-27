@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Field, Input, Modal, Select } from "../../components/ui";
 import { errorMessage, rpc } from "../../lib/rpc";
-import { useApp, type Session } from "../../store/app";
+import { type Session, useApp } from "../../store/app";
 
 export function NewKeyDialog({ open, onClose, session }: { open: boolean; onClose: () => void; session: Session }) {
   const [type, setType] = useState("string");

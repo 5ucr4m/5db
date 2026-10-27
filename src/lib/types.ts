@@ -119,10 +119,25 @@ export interface RowsPage {
 }
 
 export type FilterOp =
-  | "eq" | "neq" | "lt" | "lte" | "gt" | "gte"
-  | "contains" | "not_contains" | "starts_with" | "ends_with" | "regex"
-  | "in" | "not_in" | "between"
-  | "is_null" | "not_null" | "is_empty" | "is_true" | "is_false";
+  | "eq"
+  | "neq"
+  | "lt"
+  | "lte"
+  | "gt"
+  | "gte"
+  | "contains"
+  | "not_contains"
+  | "starts_with"
+  | "ends_with"
+  | "regex"
+  | "in"
+  | "not_in"
+  | "between"
+  | "is_null"
+  | "not_null"
+  | "is_empty"
+  | "is_true"
+  | "is_false";
 
 export interface Filter {
   id: string;

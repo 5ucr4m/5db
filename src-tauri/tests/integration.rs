@@ -1,8 +1,8 @@
 //! End-to-end tests of the RPC surface against the docker fixtures in
 //! `docker/` (`docker compose -f docker/docker-compose.yml up -d`).
 
-use fivedb_lib::rpc::{dispatch, AppState};
-use serde_json::{json, Value};
+use fivedb_lib::rpc::{AppState, dispatch};
+use serde_json::{Value, json};
 
 fn state() -> AppState {
     let dir = std::env::temp_dir().join(format!("5db-test-{}", uuid_like()));
@@ -65,11 +65,19 @@ async fn connections_persist_and_test() {
     .await;
     assert!(bad.unwrap_err().message.contains("password"));
 
-    let r = call(&s, "connections.test", json!({ "kind": "redis", "host": "127.0.0.1", "port": 63799, "password": "fivedb" })).await;
+    let r = call(
+        &s,
+        "connections.test",
+        json!({ "kind": "redis", "host": "127.0.0.1", "port": 63799, "password": "fivedb" }),
+    )
+    .await;
     assert_eq!(r["pong"], "PONG");
 
     call(&s, "connections.delete", json!({ "id": id })).await;
-    assert_eq!(call(&s, "connections.list", json!({})).await.as_array().unwrap().len(), 0);
+    assert_eq!(
+        call(&s, "connections.list", json!({})).await.as_array().unwrap().len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -87,7 +95,14 @@ async fn introspection() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|o| format!("{}.{}:{}", o["schema"].as_str().unwrap(), o["name"].as_str().unwrap(), o["kind"].as_str().unwrap()))
+        .map(|o| {
+            format!(
+                "{}.{}:{}",
+                o["schema"].as_str().unwrap(),
+                o["name"].as_str().unwrap(),
+                o["kind"].as_str().unwrap()
+            )
+        })
         .collect();
     for expected in [
         "public.customers:table",
@@ -102,9 +117,17 @@ async fn introspection() {
     let fns = objs["functions"].as_array().unwrap();
     assert!(fns.iter().any(|f| f["name"] == "customer_order_count"));
     // Extension functions (pgcrypto) are hidden.
-    assert!(!fns.iter().any(|f| f["name"] == "gen_random_uuid" || f["name"] == "crypt"));
+    assert!(
+        !fns.iter()
+            .any(|f| f["name"] == "gen_random_uuid" || f["name"] == "crypt")
+    );
 
-    let st = call(&s, "pg.structure", json!({ "connectionId": id, "schema": "public", "table": "orders" })).await;
+    let st = call(
+        &s,
+        "pg.structure",
+        json!({ "connectionId": id, "schema": "public", "table": "orders" }),
+    )
+    .await;
     let cols = st["columns"].as_array().unwrap();
     assert_eq!(cols[0]["name"], "id");
     assert_eq!(cols[0]["isPk"], true);
@@ -113,11 +136,27 @@ async fn introspection() {
     assert_eq!(st["foreignKeys"][0]["refTable"], "customers");
     assert!(st["indexes"].as_array().unwrap().len() >= 3);
 
-    let cust = call(&s, "pg.structure", json!({ "connectionId": id, "schema": "public", "table": "customers" })).await;
-    assert!(cust["referencedBy"].as_array().unwrap().iter().any(|r| r["table"] == "orders"));
+    let cust = call(
+        &s,
+        "pg.structure",
+        json!({ "connectionId": id, "schema": "public", "table": "customers" }),
+    )
+    .await;
+    assert!(
+        cust["referencedBy"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["table"] == "orders")
+    );
     assert_eq!(cust["comment"], "People who buy things");
 
-    let view = call(&s, "pg.structure", json!({ "connectionId": id, "schema": "public", "table": "vip_customers" })).await;
+    let view = call(
+        &s,
+        "pg.structure",
+        json!({ "connectionId": id, "schema": "public", "table": "vip_customers" }),
+    )
+    .await;
     assert!(view["viewDefinition"].as_str().unwrap().contains("is_vip"));
 
     let comp = call(&s, "pg.completion", json!({ "connectionId": id })).await;
@@ -159,7 +198,8 @@ async fn browse_filter_sort_page() {
 
     // OR mode, IN, null checks, contains on jsonb, raw where, search
     let mut req = base.clone();
-    req["filters"] = json!([{ "column": "id", "op": "in", "value": "1, 2, 3" }, { "column": "id", "op": "eq", "value": "4999" }]);
+    req["filters"] =
+        json!([{ "column": "id", "op": "in", "value": "1, 2, 3" }, { "column": "id", "op": "eq", "value": "4999" }]);
     req["matchMode"] = json!("or");
     assert_eq!(call(&s, "pg.rows", req).await["total"], 4);
 
@@ -196,12 +236,22 @@ async fn browse_filter_sort_page() {
     assert!(dispatch(&s, "pg.rows", req).await.is_err());
 
     // views browse but are not editable
-    let v = call(&s, "pg.rows", json!({ "connectionId": id, "schema": "public", "table": "vip_customers" })).await;
+    let v = call(
+        &s,
+        "pg.rows",
+        json!({ "connectionId": id, "schema": "public", "table": "vip_customers" }),
+    )
+    .await;
     assert_eq!(v["editable"], false);
     assert!(v["total"].as_i64().unwrap() > 0);
 
     // other schemas
-    let d = call(&s, "pg.rows", json!({ "connectionId": id, "schema": "analytics", "table": "daily_visits" })).await;
+    let d = call(
+        &s,
+        "pg.rows",
+        json!({ "connectionId": id, "schema": "analytics", "table": "daily_visits" }),
+    )
+    .await;
     assert_eq!(d["total"], 91);
 }
 
@@ -212,7 +262,12 @@ async fn staged_edits_are_atomic() {
     let t = |changes: Value| json!({ "connectionId": id, "schema": "public", "table": "products", "changes": changes });
 
     // insert with defaults, then update and delete by pk
-    call(&s, "pg.apply", t(json!([{ "kind": "insert", "values": { "title": "Test item", "price": "9.99", "tags": "{a,b}" } }]))).await;
+    call(
+        &s,
+        "pg.apply",
+        t(json!([{ "kind": "insert", "values": { "title": "Test item", "price": "9.99", "tags": "{a,b}" } }])),
+    )
+    .await;
     let mut find = json!({ "connectionId": id, "schema": "public", "table": "products" });
     find["filters"] = json!([{ "column": "title", "op": "eq", "value": "Test item" }]);
     let row = call(&s, "pg.rows", find.clone()).await;
@@ -238,11 +293,21 @@ async fn staged_edits_are_atomic() {
     assert!(err.message.contains("Change #2"), "{}", err.message);
     assert_eq!(call(&s, "pg.rows", find.clone()).await["total"], 1);
 
-    call(&s, "pg.apply", t(json!([{ "kind": "delete", "key": { "pk": { "id": pid } } }]))).await;
+    call(
+        &s,
+        "pg.apply",
+        t(json!([{ "kind": "delete", "key": { "pk": { "id": pid } } }])),
+    )
+    .await;
     assert_eq!(call(&s, "pg.rows", find).await["total"], 0);
 
     // tables without a primary key are edited by ctid
-    let log = call(&s, "pg.rows", json!({ "connectionId": id, "schema": "public", "table": "audit_log" })).await;
+    let log = call(
+        &s,
+        "pg.rows",
+        json!({ "connectionId": id, "schema": "public", "table": "audit_log" }),
+    )
+    .await;
     let ctid = log["rowIds"][0].as_str().unwrap().to_string();
     let marker = format!("edited-{}", std::process::id());
     call(
@@ -261,7 +326,12 @@ async fn staged_edits_are_atomic() {
 async fn sql_editor_and_history() {
     let s = state();
     let id = pg_conn(&s).await;
-    let r = call(&s, "pg.execute", json!({ "connectionId": id, "sql": "SELECT id, name, is_vip FROM customers ORDER BY id LIMIT 3" })).await;
+    let r = call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": id, "sql": "SELECT id, name, is_vip FROM customers ORDER BY id LIMIT 3" }),
+    )
+    .await;
     assert_eq!(r["results"][0]["rows"].as_array().unwrap().len(), 3);
     assert_eq!(r["results"][0]["columnTypes"], json!(["int8", "text", "bool"]));
     assert_eq!(r["history"]["rows"], 3);
@@ -279,19 +349,39 @@ async fn sql_editor_and_history() {
     assert_eq!(sets[2]["rows"][0][0], "15");
 
     // errors carry the position
-    let r = call(&s, "pg.execute", json!({ "connectionId": id, "sql": "SELECT * FROM nope" })).await;
+    let r = call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": id, "sql": "SELECT * FROM nope" }),
+    )
+    .await;
     assert_eq!(r["error"]["code"], "42P01");
     assert_eq!(r["error"]["position"], 15);
 
     // row cap truncates and stops the server
-    let r = call(&s, "pg.execute", json!({ "connectionId": id, "sql": "SELECT g FROM generate_series(1, 2000000) g", "maxRows": 1000 })).await;
+    let r = call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": id, "sql": "SELECT g FROM generate_series(1, 2000000) g", "maxRows": 1000 }),
+    )
+    .await;
     assert_eq!(r["results"][0]["rows"].as_array().unwrap().len(), 1000);
     assert_eq!(r["results"][0]["truncated"], true);
     assert!(r["error"].is_null(), "{}", r["error"]);
 
     // the editor keeps its transaction across runs
-    call(&s, "pg.execute", json!({ "connectionId": id, "sql": "BEGIN; UPDATE customers SET name = 'tx' WHERE id = 1" })).await;
-    let other = call(&s, "pg.rows", json!({ "connectionId": id, "schema": "public", "table": "customers", "limit": 1 })).await;
+    call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": id, "sql": "BEGIN; UPDATE customers SET name = 'tx' WHERE id = 1" }),
+    )
+    .await;
+    let other = call(
+        &s,
+        "pg.rows",
+        json!({ "connectionId": id, "schema": "public", "table": "customers", "limit": 1 }),
+    )
+    .await;
     assert_ne!(other["rows"][0][1], "tx");
     call(&s, "pg.execute", json!({ "connectionId": id, "sql": "ROLLBACK" })).await;
 
@@ -299,7 +389,14 @@ async fn sql_editor_and_history() {
     let s = std::sync::Arc::new(s);
     let s2 = s.clone();
     let id2 = id.clone();
-    let run = tokio::spawn(async move { dispatch(&s2, "pg.execute", json!({ "connectionId": id2, "sql": "SELECT pg_sleep(10)" })).await });
+    let run = tokio::spawn(async move {
+        dispatch(
+            &s2,
+            "pg.execute",
+            json!({ "connectionId": id2, "sql": "SELECT pg_sleep(10)" }),
+        )
+        .await
+    });
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     call(&s, "pg.cancel", json!({ "connectionId": id })).await;
     let r = run.await.unwrap().unwrap();
@@ -309,7 +406,14 @@ async fn sql_editor_and_history() {
     let fresh = pg_conn(&s).await;
     let s3 = s.clone();
     let f2 = fresh.clone();
-    let run = tokio::spawn(async move { dispatch(&s3, "pg.execute", json!({ "connectionId": f2, "sql": "SELECT pg_sleep(10)" })).await });
+    let run = tokio::spawn(async move {
+        dispatch(
+            &s3,
+            "pg.execute",
+            json!({ "connectionId": f2, "sql": "SELECT pg_sleep(10)" }),
+        )
+        .await
+    });
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     let started = std::time::Instant::now();
     call(&s, "pg.cancel", json!({ "connectionId": fresh })).await;
@@ -320,11 +424,28 @@ async fn sql_editor_and_history() {
     let hist = call(&s, "history.list", json!({ "connectionId": id })).await;
     assert!(hist.as_array().unwrap().len() >= 6);
     assert!(hist[0]["sql"].as_str().unwrap().contains("pg_sleep"));
-    let found = call(&s, "history.list", json!({ "connectionId": id, "search": "generate_series(1, 2000000)" })).await;
+    let found = call(
+        &s,
+        "history.list",
+        json!({ "connectionId": id, "search": "generate_series(1, 2000000)" }),
+    )
+    .await;
     assert_eq!(found.as_array().unwrap().len(), 1);
 
-    let saved = call(&s, "saved.save", json!({ "name": "Top customers", "sql": "SELECT 1", "connectionId": id })).await;
-    assert_eq!(call(&s, "saved.list", json!({ "connectionId": id })).await.as_array().unwrap().len(), 1);
+    let saved = call(
+        &s,
+        "saved.save",
+        json!({ "name": "Top customers", "sql": "SELECT 1", "connectionId": id }),
+    )
+    .await;
+    assert_eq!(
+        call(&s, "saved.list", json!({ "connectionId": id }))
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     call(&s, "saved.delete", json!({ "id": saved["id"] })).await;
 
     let act = call(&s, "pg.activity", json!({ "connectionId": id })).await;
@@ -339,11 +460,21 @@ async fn redis_browse_and_edit() {
     assert!(info["sections"]["server"]["redis_version"].is_string());
     assert_eq!(info["databases"], 16);
 
-    let page = call(&s, "redis.scan", json!({ "connectionId": id, "pattern": "user:*", "count": 1000 })).await;
+    let page = call(
+        &s,
+        "redis.scan",
+        json!({ "connectionId": id, "pattern": "user:*", "count": 1000 }),
+    )
+    .await;
     assert_eq!(page["keys"].as_array().unwrap().len(), 50);
     assert_eq!(page["keys"][0]["type"], "hash");
 
-    let typed = call(&s, "redis.scan", json!({ "connectionId": id, "keyType": "zset", "count": 1000 })).await;
+    let typed = call(
+        &s,
+        "redis.scan",
+        json!({ "connectionId": id, "keyType": "zset", "count": 1000 }),
+    )
+    .await;
     assert!(typed["keys"].as_array().unwrap().iter().all(|k| k["type"] == "zset"));
 
     let h = call(&s, "redis.get", json!({ "connectionId": id, "key": "user:7" })).await;
@@ -357,21 +488,51 @@ async fn redis_browse_and_edit() {
     let ttl = call(&s, "redis.get", json!({ "connectionId": id, "key": "session:user:1" })).await;
     assert!(ttl["ttlMs"].as_i64().unwrap() > 0);
 
-    call(&s, "redis.command", json!({ "connectionId": id, "args": ["SET", "test:key", "hello world"] })).await;
+    call(
+        &s,
+        "redis.command",
+        json!({ "connectionId": id, "args": ["SET", "test:key", "hello world"] }),
+    )
+    .await;
     let v = call(&s, "redis.get", json!({ "connectionId": id, "key": "test:key" })).await;
     assert_eq!(v["value"], "hello world");
-    let out = call(&s, "redis.console", json!({ "connectionId": id, "line": "SET test:key \"quoted value\" EX 100" })).await;
+    let out = call(
+        &s,
+        "redis.console",
+        json!({ "connectionId": id, "line": "SET test:key \"quoted value\" EX 100" }),
+    )
+    .await;
     assert_eq!(out["value"], "OK");
-    let out = call(&s, "redis.console", json!({ "connectionId": id, "line": "GET test:key" })).await;
+    let out = call(
+        &s,
+        "redis.console",
+        json!({ "connectionId": id, "line": "GET test:key" }),
+    )
+    .await;
     assert_eq!(out["value"], "quoted value");
-    call(&s, "redis.command", json!({ "connectionId": id, "args": ["DEL", "test:key"] })).await;
-    assert!(dispatch(&s, "redis.get", json!({ "connectionId": id, "key": "test:key" })).await.is_err());
+    call(
+        &s,
+        "redis.command",
+        json!({ "connectionId": id, "args": ["DEL", "test:key"] }),
+    )
+    .await;
+    assert!(
+        dispatch(&s, "redis.get", json!({ "connectionId": id, "key": "test:key" }))
+            .await
+            .is_err()
+    );
 
     // database switching
     let db1 = call(&s, "redis.scan", json!({ "connectionId": id, "db": 1 })).await;
     assert_eq!(db1["keys"][0]["key"], "cache:db1:hello");
 
-    let err = dispatch(&s, "redis.console", json!({ "connectionId": id, "line": "NOTACOMMAND" })).await.unwrap_err();
+    let err = dispatch(
+        &s,
+        "redis.console",
+        json!({ "connectionId": id, "line": "NOTACOMMAND" }),
+    )
+    .await
+    .unwrap_err();
     assert!(err.message.to_lowercase().contains("unknown"));
     let hist = call(&s, "history.list", json!({ "connectionId": id })).await;
     assert_eq!(hist.as_array().unwrap().len(), 3);
@@ -392,18 +553,39 @@ async fn ssh_tunnels() {
     assert_eq!(t["viaSsh"], true);
     assert_eq!(t["database"], "shop");
 
-    let id = call(&s, "connections.save", pg.clone()).await["id"].as_str().unwrap().to_string();
-    let rows = call(&s, "pg.rows", json!({ "connectionId": id, "schema": "public", "table": "customers", "limit": 3 })).await;
+    let id = call(&s, "connections.save", pg.clone()).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rows = call(
+        &s,
+        "pg.rows",
+        json!({ "connectionId": id, "schema": "public", "table": "customers", "limit": 3 }),
+    )
+    .await;
     assert_eq!(rows["total"], 5000);
     // The editor and writer connections share the same tunnel.
-    let r = call(&s, "pg.execute", json!({ "connectionId": id, "sql": "SELECT inet_server_port()" })).await;
+    let r = call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": id, "sql": "SELECT inet_server_port()" }),
+    )
+    .await;
     assert_eq!(r["results"][0]["rows"][0][0], "5432");
 
     // Redis through the same bastion, authenticating with a private key.
     let rd = json!({ "name": "Tunnelled cache", "kind": "redis", "host": "redis", "port": 6379, "password": "fivedb",
         "sshEnabled": true, "sshHost": "127.0.0.1", "sshPort": 22229, "sshUser": "tunnel", "sshKeyPath": key_path() });
-    let rid = call(&s, "connections.save", rd).await["id"].as_str().unwrap().to_string();
-    let page = call(&s, "redis.scan", json!({ "connectionId": rid, "pattern": "user:*", "count": 1000 })).await;
+    let rid = call(&s, "connections.save", rd).await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let page = call(
+        &s,
+        "redis.scan",
+        json!({ "connectionId": rid, "pattern": "user:*", "count": 1000 }),
+    )
+    .await;
     assert_eq!(page["keys"].as_array().unwrap().len(), 50);
 
     // Clear errors for the usual mistakes.
@@ -414,7 +596,11 @@ async fn ssh_tunnels() {
     let mut bad = pg.clone();
     bad["host"] = json!("nowhere.invalid");
     let e = dispatch(&s, "connections.test", bad).await.unwrap_err();
-    assert!(e.message.contains("forwarding to nowhere.invalid:5432"), "{}", e.message);
+    assert!(
+        e.message.contains("forwarding to nowhere.invalid:5432"),
+        "{}",
+        e.message
+    );
     let mut bad = pg.clone();
     bad["sshKeyPath"] = json!("/no/such/key");
     let e = dispatch(&s, "connections.test", bad).await.unwrap_err();

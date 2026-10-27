@@ -1,13 +1,28 @@
-import { useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Activity, ChevronDown, ChevronRight, Clock, Database, Eye, FileCode2, Globe, Layers, Plus, RefreshCw, Search, Table2, X } from "lucide-react";
-import { IconButton, Input, MenuItem, MenuLabel, Popover, Spinner, cx } from "../../components/ui";
+import {
+  Activity,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Database,
+  Eye,
+  FileCode2,
+  Globe,
+  Layers,
+  Plus,
+  RefreshCw,
+  Search,
+  Table2,
+  X,
+} from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { cx, IconButton, Input, MenuItem, MenuLabel, Popover, Spinner } from "../../components/ui";
 import { copyText } from "../../lib/export";
 import { formatBytes } from "../../lib/format";
 import { errorMessage, rpc } from "../../lib/rpc";
 import { qualified } from "../../lib/sql";
 import type { ObjectKind, PgFunction, PgObject } from "../../lib/types";
-import { useApp, type Session } from "../../store/app";
+import { type Session, useApp } from "../../store/app";
 
 type Item =
   | { type: "schema"; schema: string; count: number; collapsed: boolean }
@@ -39,7 +54,8 @@ export function PgSidebar({ session }: { session: Session }) {
   const menuAnchor = useRef<HTMLDivElement>(null);
 
   const activeTab = session.tabs.find((t) => t.id === session.activeTabId);
-  const activeKey = activeTab?.kind === "table" ? `${activeTab.schema}.${activeTab.name}` : activeTab?.kind === "function" ? `fn:${activeTab.oid}` : null;
+  const activeKey =
+    activeTab?.kind === "table" ? `${activeTab.schema}.${activeTab.name}` : activeTab?.kind === "function" ? `fn:${activeTab.oid}` : null;
 
   const items = useMemo<Item[]>(() => {
     const objs = session.objects;
@@ -91,6 +107,7 @@ export function PgSidebar({ session }: { session: Session }) {
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1 px-2 pt-2 pb-1">
         <button
+          type="button"
           ref={dbRef}
           onClick={loadDatabases}
           className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 text-left text-sm font-medium hover:bg-raised"
@@ -146,7 +163,12 @@ export function PgSidebar({ session }: { session: Session }) {
           }}
         />
         {filter && (
-          <button className="absolute top-2 right-4 text-faint hover:text-fg" onClick={() => setFilter("")} aria-label="Clear filter">
+          <button
+            type="button"
+            className="absolute top-2 right-4 text-faint hover:text-fg"
+            onClick={() => setFilter("")}
+            aria-label="Clear filter"
+          >
             <X className="size-3.5" />
           </button>
         )}
@@ -167,6 +189,7 @@ export function PgSidebar({ session }: { session: Session }) {
               if (it.type === "schema")
                 return (
                   <button
+                    type="button"
                     key={vi.key}
                     style={style}
                     onClick={() => setCollapsed((c) => ({ ...c, [it.schema]: !it.collapsed }))}
@@ -180,6 +203,7 @@ export function PgSidebar({ session }: { session: Session }) {
               if (it.type === "fnheader")
                 return (
                   <button
+                    type="button"
                     key={vi.key}
                     style={style}
                     onClick={() => setCollapsed((c) => ({ ...c, [`fn:${it.schema}`]: !it.collapsed }))}
@@ -195,11 +219,21 @@ export function PgSidebar({ session }: { session: Session }) {
                 const key = `fn:${it.f.oid}`;
                 return (
                   <button
+                    type="button"
                     key={vi.key}
                     style={style}
                     title={`${it.f.name}(${it.f.args}) → ${it.f.returns}`}
-                    onClick={() => openTab(session.id, { kind: "function", title: it.f.name, schema: it.f.schema, name: it.f.name, oid: it.f.oid }, { preview: true })}
-                    className={cx("flex items-center gap-2 rounded-md pr-2 pl-7 text-left font-mono text-[12px]", activeKey === key ? "bg-iris-soft text-iris" : "text-muted hover:bg-raised hover:text-fg")}
+                    onClick={() =>
+                      openTab(
+                        session.id,
+                        { kind: "function", title: it.f.name, schema: it.f.schema, name: it.f.name, oid: it.f.oid },
+                        { preview: true },
+                      )
+                    }
+                    className={cx(
+                      "flex items-center gap-2 rounded-md pr-2 pl-7 text-left font-mono text-[12px]",
+                      activeKey === key ? "bg-iris-soft text-iris" : "text-muted hover:bg-raised hover:text-fg",
+                    )}
                   >
                     <span className="truncate">{it.f.name}</span>
                     <span className="truncate text-[10px] text-faint">({it.f.args})</span>
@@ -211,6 +245,7 @@ export function PgSidebar({ session }: { session: Session }) {
               const key = `${o.schema}.${o.name}`;
               return (
                 <button
+                  type="button"
                   key={vi.key}
                   style={style}
                   title={o.comment ?? `${o.schema}.${o.name}`}
@@ -225,7 +260,9 @@ export function PgSidebar({ session }: { session: Session }) {
                     activeKey === key ? "bg-iris-soft text-fg" : "text-fg/90 hover:bg-raised",
                   )}
                 >
-                  <Icon className={cx("size-3.5 shrink-0", activeKey === key ? "text-iris" : o.kind === "table" ? "text-faint" : "text-info")} />
+                  <Icon
+                    className={cx("size-3.5 shrink-0", activeKey === key ? "text-iris" : o.kind === "table" ? "text-faint" : "text-info")}
+                  />
                   <span className="truncate">{o.name}</span>
                   <span className="ml-auto shrink-0 font-mono text-[10px] text-faint tabular">{compact(o.rowEstimate)}</span>
                 </button>
@@ -237,7 +274,10 @@ export function PgSidebar({ session }: { session: Session }) {
 
       <div className="flex shrink-0 items-center gap-0.5 border-t border-line p-1.5">
         <button
-          onClick={() => openTab(session.id, { kind: "query", title: `Query ${session.tabs.filter((t) => t.kind === "query").length + 1}`, sql: "" })}
+          type="button"
+          onClick={() =>
+            openTab(session.id, { kind: "query", title: `Query ${session.tabs.filter((t) => t.kind === "query").length + 1}`, sql: "" })
+          }
           className="flex h-7 flex-1 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-iris hover:bg-iris-soft"
         >
           <Plus className="size-3.5" /> New query <span className="ml-auto font-mono text-[10px] text-faint">⌘T</span>
@@ -261,7 +301,14 @@ export function PgSidebar({ session }: { session: Session }) {
             <MenuItem
               onClick={() => {
                 setMenu(null);
-                openTab(session.id, { kind: "table", title: menu.o.name, schema: menu.o.schema, name: menu.o.name, objectKind: menu.o.kind, view: "structure" });
+                openTab(session.id, {
+                  kind: "table",
+                  title: menu.o.name,
+                  schema: menu.o.schema,
+                  name: menu.o.name,
+                  objectKind: menu.o.kind,
+                  view: "structure",
+                });
               }}
             >
               Open structure
@@ -269,12 +316,18 @@ export function PgSidebar({ session }: { session: Session }) {
             <MenuItem
               onClick={() => {
                 setMenu(null);
-                openTab(session.id, { kind: "query", title: `Query · ${menu.o.name}`, sql: `SELECT *\nFROM ${qualified(menu.o.schema, menu.o.name)}\nLIMIT 100;` });
+                openTab(session.id, {
+                  kind: "query",
+                  title: `Query · ${menu.o.name}`,
+                  sql: `SELECT *\nFROM ${qualified(menu.o.schema, menu.o.name)}\nLIMIT 100;`,
+                });
               }}
             >
               New query on this table
             </MenuItem>
-            <MenuItem onClick={() => (setMenu(null), void copyText(qualified(menu.o.schema, menu.o.name)), toast("ok", "Copied name"))}>Copy qualified name</MenuItem>
+            <MenuItem onClick={() => (setMenu(null), void copyText(qualified(menu.o.schema, menu.o.name)), toast("ok", "Copied name"))}>
+              Copy qualified name
+            </MenuItem>
           </>
         )}
       </Popover>

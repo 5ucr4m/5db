@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client::{self, Handle};
-use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
+use russh::keys::{PrivateKeyWithHashAlg, load_secret_key};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
@@ -55,8 +55,18 @@ fn expand_home(path: &str) -> String {
 }
 
 pub async fn open(cfg: &ConnectionConfig) -> AppResult<Tunnel> {
-    let target_host = if cfg.host.is_empty() { "127.0.0.1".to_string() } else { cfg.host.clone() };
-    let target_port = if cfg.port != 0 { cfg.port } else if cfg.kind == "redis" { 6379 } else { 5432 };
+    let target_host = if cfg.host.is_empty() {
+        "127.0.0.1".to_string()
+    } else {
+        cfg.host.clone()
+    };
+    let target_port = if cfg.port != 0 {
+        cfg.port
+    } else if cfg.kind == "redis" {
+        6379
+    } else {
+        5432
+    };
     let ssh_port = if cfg.ssh_port == 0 { 22 } else { cfg.ssh_port };
     if cfg.ssh_host.trim().is_empty() {
         return Err(AppError::msg("Enter the SSH host to tunnel through."));
@@ -75,12 +85,20 @@ pub async fn open(cfg: &ConnectionConfig) -> AppResult<Tunnel> {
     .map_err(|_| AppError::msg(format!("Timed out connecting to SSH host {}:{ssh_port}.", cfg.ssh_host)))?
     .map_err(|e| ssh_err("connection", e))?;
 
-    let user = if cfg.ssh_user.is_empty() { "root".to_string() } else { cfg.ssh_user.clone() };
+    let user = if cfg.ssh_user.is_empty() {
+        "root".to_string()
+    } else {
+        cfg.ssh_user.clone()
+    };
     let authenticated = if !cfg.ssh_key_path.trim().is_empty() {
         let passphrase = (!cfg.ssh_passphrase.is_empty()).then_some(cfg.ssh_passphrase.as_str());
-        let key = load_secret_key(expand_home(cfg.ssh_key_path.trim()), passphrase)
-            .map_err(|e| ssh_err("private key", e))?;
-        let hash = handle.best_supported_rsa_hash().await.map_err(|e| ssh_err("negotiation", e))?.flatten();
+        let key =
+            load_secret_key(expand_home(cfg.ssh_key_path.trim()), passphrase).map_err(|e| ssh_err("private key", e))?;
+        let hash = handle
+            .best_supported_rsa_hash()
+            .await
+            .map_err(|e| ssh_err("negotiation", e))?
+            .flatten();
         handle
             .authenticate_publickey(user.clone(), PrivateKeyWithHashAlg::new(Arc::new(key), hash))
             .await
@@ -94,7 +112,9 @@ pub async fn open(cfg: &ConnectionConfig) -> AppResult<Tunnel> {
             .success()
     };
     if !authenticated {
-        return Err(AppError::msg(format!("SSH server rejected the credentials for user “{user}”.")));
+        return Err(AppError::msg(format!(
+            "SSH server rejected the credentials for user “{user}”."
+        )));
     }
 
     // Prove the forward works before handing the port out, so a refused
@@ -128,7 +148,11 @@ pub async fn open(cfg: &ConnectionConfig) -> AppResult<Tunnel> {
             });
         }
     });
-    Ok(Tunnel { local_port, handle, accept_task })
+    Ok(Tunnel {
+        local_port,
+        handle,
+        accept_task,
+    })
 }
 
 /// The config the database driver should use: same credentials, local endpoint.

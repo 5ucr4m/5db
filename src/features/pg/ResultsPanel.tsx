@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Clipboard, Download, Scissors, Table2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 import { DataGrid, type GridColumn } from "../../components/grid/DataGrid";
-import { Button, EmptyState, MenuItem, MenuLabel, MenuSeparator, Popover, Spinner, cx } from "../../components/ui";
+import { Button, cx, EmptyState, MenuItem, MenuLabel, MenuSeparator, Popover, Spinner } from "../../components/ui";
 import { copyText, saveText, toCsv, toJson, toMarkdown, toTsv } from "../../lib/export";
 import { formatDuration, formatInt, typeFamily } from "../../lib/format";
 import { insertStatements } from "../../lib/sql";
@@ -15,7 +15,17 @@ export function resultColumns(rs: ResultSet): GridColumn[] {
   });
 }
 
-export function ExportMenu({ columns, rows, baseName, tableName }: { columns: string[]; rows: Cell[][]; baseName: string; tableName?: string }) {
+export function ExportMenu({
+  columns,
+  rows,
+  baseName,
+  tableName,
+}: {
+  columns: string[];
+  rows: Cell[][];
+  baseName: string;
+  tableName?: string;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLButtonElement>(null);
   const toast = useApp((s) => s.toast);
@@ -35,7 +45,14 @@ export function ExportMenu({ columns, rows, baseName, tableName }: { columns: st
   };
   return (
     <>
-      <Button ref={ref} size="sm" variant="ghost" icon={<Download className="size-3.5" />} onClick={() => setOpen((v) => !v)} disabled={!columns.length}>
+      <Button
+        ref={ref}
+        size="sm"
+        variant="ghost"
+        icon={<Download className="size-3.5" />}
+        onClick={() => setOpen((v) => !v)}
+        disabled={!columns.length}
+      >
         Export
       </Button>
       <Popover anchor={ref.current} open={open} onClose={() => setOpen(false)} align="end" className="w-56">
@@ -104,6 +121,7 @@ export function ResultsPanel({
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-line px-2">
         {sets.map((s, i) => (
           <button
+            type="button"
             key={i}
             onClick={() => setActive(i)}
             className={cx(
@@ -112,7 +130,9 @@ export function ResultsPanel({
             )}
           >
             {s.kind === "rows" ? <Table2 className="size-3" /> : <CheckCircle2 className="size-3" />}
-            {s.kind === "rows" ? `${formatInt(s.rows.length)} row${s.rows.length === 1 ? "" : "s"}` : `${formatInt(s.affected ?? 0)} affected`}
+            {s.kind === "rows"
+              ? `${formatInt(s.rows.length)} row${s.rows.length === 1 ? "" : "s"}`
+              : `${formatInt(s.affected ?? 0)} affected`}
             {s.truncated && <Scissors className="size-3 text-warn" />}
           </button>
         ))}
@@ -138,7 +158,7 @@ export function ResultsPanel({
               <div className="mt-1.5 flex items-center gap-3 font-mono text-[11px] text-faint">
                 {result.error.code && <span>SQLSTATE {result.error.code}</span>}
                 {result.error.position != null && onJumpToError && (
-                  <button className="font-sans font-medium text-iris hover:underline" onClick={onJumpToError}>
+                  <button type="button" className="font-sans font-medium text-iris hover:underline" onClick={onJumpToError}>
                     Show in editor
                   </button>
                 )}
@@ -170,12 +190,14 @@ export function ResultsPanel({
                 { label: "Copy value", run: () => void copyText(current.rows[r][c] ?? "") },
                 {
                   label: "Copy row as JSON",
-                  run: () => void copyText(JSON.stringify(Object.fromEntries(current.columns.map((n, i) => [n, current.rows[r][i]])), null, 2)),
+                  run: () =>
+                    void copyText(JSON.stringify(Object.fromEntries(current.columns.map((n, i) => [n, current.rows[r][i]])), null, 2)),
                 },
                 {
                   label: "Copy selection with headers",
                   run: () => {
-                    const r0 = Math.min(sel.anchor.r, sel.focus.r), r1 = Math.max(sel.anchor.r, sel.focus.r);
+                    const r0 = Math.min(sel.anchor.r, sel.focus.r),
+                      r1 = Math.max(sel.anchor.r, sel.focus.r);
                     void copyText(toTsv(current.columns, current.rows.slice(r0, r1 + 1)));
                   },
                 },

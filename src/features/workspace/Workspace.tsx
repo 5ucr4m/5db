@@ -1,8 +1,23 @@
+import {
+  Activity,
+  Clock,
+  Eye,
+  FileCode2,
+  Gauge,
+  Globe,
+  KeyRound,
+  Layers,
+  Plus,
+  RefreshCw,
+  ShieldAlert,
+  Table2,
+  Terminal,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Activity, Clock, Eye, FileCode2, Gauge, Globe, KeyRound, Layers, Plus, RefreshCw, ShieldAlert, Table2, Terminal, X } from "lucide-react";
-import { Button, EmptyState, Kbd, MenuItem, Popover, Resizer, Spinner, cx, useResizable } from "../../components/ui";
-import { ENV_META, connectionSummary } from "../../lib/connections";
-import { useApp, useConnection, type Session, type Tab } from "../../store/app";
+import { Button, cx, EmptyState, Kbd, MenuItem, Popover, Resizer, Spinner, useResizable } from "../../components/ui";
+import { connectionSummary, ENV_META } from "../../lib/connections";
+import { type Session, type Tab, useApp, useConnection } from "../../store/app";
 import { ActivityTab, FunctionTab, HistoryTab } from "../pg/MiscTabs";
 import { PgSidebar } from "../pg/PgSidebar";
 import { QueryTab } from "../pg/QueryTab";
@@ -45,7 +60,10 @@ export function Workspace({ session, visible }: { session: Session; visible: boo
 
   return (
     <div className={cx("h-full min-w-0 flex-1 flex-col overflow-hidden", visible ? "flex" : "hidden")}>
-      <div className={cx("h-[3px] shrink-0", conn.env === "prod" && "env-stripe-prod")} style={conn.env === "prod" ? undefined : { background: env.color, opacity: conn.env === "local" ? 0.5 : 1 }} />
+      <div
+        className={cx("h-[3px] shrink-0", conn.env === "prod" && "env-stripe-prod")}
+        style={conn.env === "prod" ? undefined : { background: env.color, opacity: conn.env === "local" ? 0.5 : 1 }}
+      />
       <div className="flex min-h-0 flex-1">
         <aside style={{ width: sideW }} className="flex shrink-0 flex-col bg-panel">
           <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
@@ -55,8 +73,15 @@ export function Workspace({ session, visible }: { session: Session; visible: boo
               <div className="truncate font-mono text-[10.5px] text-faint">{connectionSummary(conn)}</div>
             </div>
             <span
-              className={cx("shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase", conn.env === "prod" && "text-white")}
-              style={conn.env === "prod" ? { background: env.color } : { color: env.color, background: `color-mix(in srgb, ${env.color} 14%, transparent)` }}
+              className={cx(
+                "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase",
+                conn.env === "prod" && "text-white",
+              )}
+              style={
+                conn.env === "prod"
+                  ? { background: env.color }
+                  : { color: env.color, background: `color-mix(in srgb, ${env.color} 14%, transparent)` }
+              }
             >
               {conn.env === "prod" ? "prod" : env.label}
             </span>
@@ -156,11 +181,16 @@ function NoTabs({ session }: { session: Session }) {
       action={
         <div className="flex flex-col items-center gap-3">
           {session.kind === "postgres" && (
-            <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => openTab(session.id, { kind: "query", title: "Query 1", sql: "" })} kbd="⌘T">
+            <Button
+              variant="primary"
+              icon={<Plus className="size-4" />}
+              onClick={() => openTab(session.id, { kind: "query", title: "Query 1", sql: "" })}
+              kbd="⌘T"
+            >
               New query
             </Button>
           )}
-          <button className="text-xs text-muted hover:text-fg" onClick={() => setPaletteOpen(true)}>
+          <button type="button" className="text-xs text-muted hover:text-fg" onClick={() => setPaletteOpen(true)}>
             Jump to anything with <Kbd>⌘K</Kbd>
           </button>
         </div>
@@ -224,10 +254,14 @@ function TabBar({ session }: { session: Session }) {
               <Icon className={cx("size-3.5 shrink-0", active ? "text-iris" : "text-faint")} />
               <span className={cx("min-w-0 flex-1 truncate", preview && "italic")}>{t.title}</span>
               <button
+                type="button"
                 aria-label={`Close ${t.title}`}
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={() => closeTab(session.id, t.id)}
-                className={cx("flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-raised hover:text-fg", !active && "opacity-0 group-hover:opacity-100")}
+                className={cx(
+                  "flex size-5 shrink-0 items-center justify-center rounded text-faint hover:bg-raised hover:text-fg",
+                  !active && "opacity-0 group-hover:opacity-100",
+                )}
               >
                 <X className="size-3" />
               </button>
@@ -235,7 +269,12 @@ function TabBar({ session }: { session: Session }) {
           );
         })}
       </div>
-      <button onClick={newTab} title={session.kind === "postgres" ? "New query (⌘T)" : "Open console"} className="flex w-9 shrink-0 items-center justify-center border-l border-line text-muted hover:bg-raised hover:text-fg">
+      <button
+        type="button"
+        onClick={newTab}
+        title={session.kind === "postgres" ? "New query (⌘T)" : "Open console"}
+        className="flex w-9 shrink-0 items-center justify-center border-l border-line text-muted hover:bg-raised hover:text-fg"
+      >
         <Plus className="size-4" />
       </button>
       <div ref={anchor} className="fixed size-0" style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }} />
@@ -270,7 +309,8 @@ function useWorkspaceShortcuts(session: Session, visible: boolean) {
       const k = e.key.toLowerCase();
       if (k === "t") {
         e.preventDefault();
-        if (s.kind === "postgres") st.openTab(s.id, { kind: "query", title: `Query ${s.tabs.filter((t) => t.kind === "query").length + 1}`, sql: "" });
+        if (s.kind === "postgres")
+          st.openTab(s.id, { kind: "query", title: `Query ${s.tabs.filter((t) => t.kind === "query").length + 1}`, sql: "" });
         else st.openTab(s.id, { kind: "redis-console", title: "Console" });
       } else if (k === "w") {
         e.preventDefault();

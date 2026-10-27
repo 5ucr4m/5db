@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
@@ -175,7 +175,9 @@ impl Store {
         }
         c.updated_at = Some(ts);
         let db = self.conn();
-        let position: i64 = db.query_row("SELECT COALESCE(MAX(position), 0) + 1 FROM connections", [], |r| r.get(0))?;
+        let position: i64 = db.query_row("SELECT COALESCE(MAX(position), 0) + 1 FROM connections", [], |r| {
+            r.get(0)
+        })?;
         db.execute(
             "INSERT INTO connections (id, position, data) VALUES (?1, ?2, ?3)
              ON CONFLICT(id) DO UPDATE SET data = excluded.data",
@@ -188,7 +190,10 @@ impl Store {
         if let Ok(mut c) = self.get_connection(id) {
             c.last_used_at = Some(now());
             let db = self.conn();
-            db.execute("UPDATE connections SET data = ?2 WHERE id = ?1", params![id, serde_json::to_string(&c)?])?;
+            db.execute(
+                "UPDATE connections SET data = ?2 WHERE id = ?1",
+                params![id, serde_json::to_string(&c)?],
+            )?;
         }
         Ok(())
     }
@@ -204,7 +209,10 @@ impl Store {
     pub fn reorder_connections(&self, ids: &[String]) -> AppResult<()> {
         let db = self.conn();
         for (i, id) in ids.iter().enumerate() {
-            db.execute("UPDATE connections SET position = ?2 WHERE id = ?1", params![id, i as i64])?;
+            db.execute(
+                "UPDATE connections SET position = ?2 WHERE id = ?1",
+                params![id, i as i64],
+            )?;
         }
         Ok(())
     }
@@ -217,7 +225,16 @@ impl Store {
         db.execute(
             "INSERT INTO history (connection_id, database, kind, sql, executed_at, duration_ms, rows, error)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![h.connection_id, h.database, h.kind, h.sql, ts, h.duration_ms, h.rows, h.error],
+            params![
+                h.connection_id,
+                h.database,
+                h.kind,
+                h.sql,
+                ts,
+                h.duration_ms,
+                h.rows,
+                h.error
+            ],
         )?;
         let id = db.last_insert_rowid();
         // Keep the log bounded per connection.
@@ -239,7 +256,12 @@ impl Store {
         })
     }
 
-    pub fn list_history(&self, connection_id: Option<&str>, search: Option<&str>, limit: i64) -> AppResult<Vec<HistoryEntry>> {
+    pub fn list_history(
+        &self,
+        connection_id: Option<&str>,
+        search: Option<&str>,
+        limit: i64,
+    ) -> AppResult<Vec<HistoryEntry>> {
         let db = self.conn();
         let pattern = search.filter(|s| !s.is_empty()).map(|s| format!("%{s}%"));
         let mut stmt = db.prepare(
@@ -269,7 +291,10 @@ impl Store {
     }
 
     pub fn clear_history(&self, connection_id: Option<&str>) -> AppResult<()> {
-        self.conn().execute("DELETE FROM history WHERE (?1 IS NULL OR connection_id = ?1)", params![connection_id])?;
+        self.conn().execute(
+            "DELETE FROM history WHERE (?1 IS NULL OR connection_id = ?1)",
+            params![connection_id],
+        )?;
         Ok(())
     }
 
@@ -306,7 +331,14 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET name = excluded.name, sql = excluded.sql,
                connection_id = excluded.connection_id, updated_at = excluded.updated_at",
-            params![q.id, q.connection_id, q.name, q.sql, q.created_at.clone().unwrap_or(ts.clone()), ts],
+            params![
+                q.id,
+                q.connection_id,
+                q.name,
+                q.sql,
+                q.created_at.clone().unwrap_or(ts.clone()),
+                ts
+            ],
         )?;
         Ok(q)
     }
@@ -319,8 +351,10 @@ impl Store {
     // ---- settings --------------------------------------------------------
 
     pub fn get_setting(&self, key: &str) -> AppResult<Option<serde_json::Value>> {
-        let v: Option<String> =
-            self.conn().query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?;
+        let v: Option<String> = self
+            .conn()
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?;
         Ok(v.and_then(|s| serde_json::from_str(&s).ok()))
     }
 

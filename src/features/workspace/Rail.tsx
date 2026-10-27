@@ -19,6 +19,7 @@ export function Rail() {
   return (
     <nav aria-label="Connections" className="flex w-[56px] shrink-0 flex-col items-center gap-2 border-r border-line bg-sunken py-3">
       <button
+        type="button"
         onClick={() => setActive(null)}
         title="All connections"
         className={cx(
@@ -37,8 +38,14 @@ export function Rail() {
           const env = ENV_META[c.env] ?? ENV_META.local;
           return (
             <div key={s.id} className="group relative">
-              <span className={cx("absolute top-1/2 -left-[10px] w-[3px] -translate-y-1/2 rounded-r-full bg-iris transition-all", active ? "h-6" : "h-0 group-hover:h-2.5")} />
+              <span
+                className={cx(
+                  "absolute top-1/2 -left-[10px] w-[3px] -translate-y-1/2 rounded-r-full bg-iris transition-all",
+                  active ? "h-6" : "h-0 group-hover:h-2.5",
+                )}
+              />
               <button
+                type="button"
                 onClick={() => setActive(s.id)}
                 title={`${c.name} · ${env.label}${s.status === "error" ? " · connection failed" : ""}`}
                 className={cx(
@@ -56,6 +63,7 @@ export function Rail() {
                 />
               </button>
               <button
+                type="button"
                 onClick={() => closeSession(s.id)}
                 aria-label={`Disconnect ${c.name}`}
                 title="Disconnect"
@@ -67,10 +75,20 @@ export function Rail() {
           );
         })}
       </div>
-      <button onClick={() => setPaletteOpen(true)} title="Command palette (⌘K)" className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-raised hover:text-fg">
+      <button
+        type="button"
+        onClick={() => setPaletteOpen(true)}
+        title="Command palette (⌘K)"
+        className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-raised hover:text-fg"
+      >
         <Command className="size-4" />
       </button>
-      <button onClick={() => setTheme(nextTheme)} title={`Theme: ${theme}. Switch to ${nextTheme}.`} className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-raised hover:text-fg">
+      <button
+        type="button"
+        onClick={() => setTheme(nextTheme)}
+        title={`Theme: ${theme}. Switch to ${nextTheme}.`}
+        className="flex size-8 items-center justify-center rounded-lg text-muted hover:bg-raised hover:text-fg"
+      >
         <ThemeIcon className="size-4" />
       </button>
     </nav>

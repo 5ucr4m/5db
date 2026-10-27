@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 import { useApp } from "../../store/app";
-import { Button, Modal, cx } from "./index";
+import { Button, cx, Modal } from "./index";
 
 export function Toasts() {
   const toasts = useApp((s) => s.toasts);
@@ -21,7 +21,7 @@ export function Toasts() {
             <Info className="mt-px size-4 shrink-0 text-iris" />
           )}
           <span className={cx("selectable flex-1 break-words", t.kind === "error" && "text-fg")}>{t.message}</span>
-          <button className="text-faint hover:text-fg" onClick={() => dismiss(t.id)} aria-label="Dismiss">
+          <button type="button" className="text-faint hover:text-fg" onClick={() => dismiss(t.id)} aria-label="Dismiss">
             <X className="size-3.5" />
           </button>
         </div>

@@ -1,16 +1,16 @@
+import { Loader2, X } from "lucide-react";
 import {
+  type ButtonHTMLAttributes,
   forwardRef,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
-  type ButtonHTMLAttributes,
-  type InputHTMLAttributes,
-  type ReactNode,
-  type SelectHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
-import { Loader2, X } from "lucide-react";
 import { twMerge } from "tailwind-merge";
 
 export const cx = (...c: (string | false | null | undefined)[]) => twMerge(c.filter(Boolean).join(" "));
@@ -45,6 +45,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   return (
     <button
       ref={ref}
+      type="button"
       disabled={disabled || loading}
       className={cx(
         "inline-flex items-center justify-center gap-1.5 rounded-md font-medium whitespace-nowrap transition-colors select-none",
@@ -74,6 +75,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   return (
     <button
       ref={ref}
+      type="button"
       aria-label={label}
       title={label}
       className={cx(
@@ -203,7 +205,15 @@ export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cx("size-4 animate-spin text-iris", className)} />;
 }
 
-export function Badge({ children, className, tone = "neutral" }: { children: ReactNode; className?: string; tone?: "neutral" | "iris" | "ok" | "warn" | "danger" }) {
+export function Badge({
+  children,
+  className,
+  tone = "neutral",
+}: {
+  children: ReactNode;
+  className?: string;
+  tone?: "neutral" | "iris" | "ok" | "warn" | "danger";
+}) {
   const tones = {
     neutral: "bg-raised text-muted border-line",
     iris: "bg-iris-soft text-iris border-iris-line",
@@ -212,7 +222,13 @@ export function Badge({ children, className, tone = "neutral" }: { children: Rea
     danger: "bg-danger/10 text-danger border-danger/30",
   };
   return (
-    <span className={cx("inline-flex h-[18px] items-center gap-1 rounded border px-1.5 text-2xs font-semibold uppercase tracking-wide", tones[tone], className)}>
+    <span
+      className={cx(
+        "inline-flex h-[18px] items-center gap-1 rounded border px-1.5 text-2xs font-semibold uppercase tracking-wide",
+        tones[tone],
+        className,
+      )}
+    >
       {children}
     </span>
   );
@@ -370,7 +386,10 @@ export function Modal({
   }, [open, onClose]);
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[12vh] animate-fade-in backdrop-blur-[2px]" onMouseDown={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[12vh] animate-fade-in backdrop-blur-[2px]"
+      onMouseDown={onClose}
+    >
       <div
         role="dialog"
         aria-modal
@@ -448,12 +467,27 @@ export function Resizer({
         className,
       )}
     >
-      <div className={cx("absolute transition-colors group-hover:bg-iris/60", direction === "x" ? "inset-y-0 -left-[2px] w-[5px]" : "inset-x-0 -top-[2px] h-[5px]")} />
+      <div
+        className={cx(
+          "absolute transition-colors group-hover:bg-iris/60",
+          direction === "x" ? "inset-y-0 -left-[2px] w-[5px]" : "inset-x-0 -top-[2px] h-[5px]",
+        )}
+      />
     </div>
   );
 }
 
-export function EmptyState({ icon, title, children, action }: { icon?: ReactNode; title: string; children?: ReactNode; action?: ReactNode }) {
+export function EmptyState({
+  icon,
+  title,
+  children,
+  action,
+}: {
+  icon?: ReactNode;
+  title: string;
+  children?: ReactNode;
+  action?: ReactNode;
+}) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
       {icon && <div className="flex size-11 items-center justify-center rounded-xl border border-line bg-raised text-iris">{icon}</div>}

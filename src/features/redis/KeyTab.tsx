@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Braces, Check, Clock, Copy, Pencil, Plus, RefreshCw, Search, Trash2, X } from "lucide-react";
-import { Button, IconButton, Input, Popover, Spinner, cx } from "../../components/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button, cx, IconButton, Input, Popover, Spinner } from "../../components/ui";
 import { copyText } from "../../lib/export";
 import { formatBytes, formatInt, formatTtl, tryPrettyJson } from "../../lib/format";
 import { errorMessage, rpc } from "../../lib/rpc";
 import type { RedisValue } from "../../lib/types";
-import { useApp, useConnection, type Session, type Tab } from "../../store/app";
+import { type Session, type Tab, useApp, useConnection } from "../../store/app";
 import { TypeBadge } from "./common";
 
 type KeyTabT = Extract<Tab, { kind: "redis-key" }>;
@@ -59,7 +59,10 @@ export function KeyTab({ session, tab }: { session: Session; tab: KeyTabT }) {
   const remove = async () => {
     const ok = await confirm({
       title: `Delete ${tab.key}?`,
-      body: conn?.env === "prod" ? "This is a production connection. The key is removed immediately." : "The key and its value are removed immediately.",
+      body:
+        conn?.env === "prod"
+          ? "This is a production connection. The key is removed immediately."
+          : "The key and its value are removed immediately.",
       confirmLabel: "Delete key",
       danger: true,
     });
@@ -106,10 +109,21 @@ export function KeyTab({ session, tab }: { session: Session; tab: KeyTabT }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <KeyHeader data={data} loading={loading} onReload={load} onDelete={remove} onRename={rename} onTtl={(args) => run(args, "Updated expiry")} />
+      <KeyHeader
+        data={data}
+        loading={loading}
+        onReload={load}
+        onDelete={remove}
+        onRename={rename}
+        onTtl={(args) => run(args, "Updated expiry")}
+      />
       <div className="min-h-0 flex-1">
         {data.type === "string" || data.type === "ReJSON-RL" ? (
-          <StringEditor value={String(data.value ?? "")} truncated={data.truncated} onSave={(v) => run(data.type === "string" ? ["SET", tab.key, v, "KEEPTTL"] : ["JSON.SET", tab.key, "$", v], "Saved")} />
+          <StringEditor
+            value={String(data.value ?? "")}
+            truncated={data.truncated}
+            onSave={(v) => run(data.type === "string" ? ["SET", tab.key, v, "KEEPTTL"] : ["JSON.SET", tab.key, "$", v], "Saved")}
+          />
         ) : data.type === "hash" ? (
           <ItemsTable
             data={data}
@@ -216,7 +230,14 @@ function KeyHeader({
               onRename(name.trim());
             }}
           >
-            <Input autoFocus mono className="h-7 flex-1" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setRenaming(false)} />
+            <Input
+              autoFocus
+              mono
+              className="h-7 flex-1"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && setRenaming(false)}
+            />
             <IconButton size="sm" label="Rename" type="submit">
               <Check className="size-3.5" />
             </IconButton>
@@ -242,11 +263,20 @@ function KeyHeader({
         )}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-        <button ref={ttlRef} onClick={() => (setTtl(data.ttlMs > 0 ? String(Math.round(data.ttlMs / 1000)) : ""), setTtlOpen(true))} className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-raised hover:text-fg">
+        <button
+          type="button"
+          ref={ttlRef}
+          onClick={() => (setTtl(data.ttlMs > 0 ? String(Math.round(data.ttlMs / 1000)) : ""), setTtlOpen(true))}
+          className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-raised hover:text-fg"
+        >
           <Clock className={cx("size-3.5", data.ttlMs >= 0 && "text-warn")} />
           {data.ttlMs >= 0 ? `Expires in ${formatTtl(data.ttlMs)}` : "No expiry"}
         </button>
-        {data.type !== "string" && <span>{formatInt(data.length)} {data.type === "hash" ? "fields" : data.type === "stream" ? "entries" : "items"}</span>}
+        {data.type !== "string" && (
+          <span>
+            {formatInt(data.length)} {data.type === "hash" ? "fields" : data.type === "stream" ? "entries" : "items"}
+          </span>
+        )}
         {data.type === "string" && <span>{formatBytes(data.length)}</span>}
         {data.memoryBytes != null && <span>{formatBytes(data.memoryBytes)} in memory</span>}
         {data.encoding && <span className="font-mono">{data.encoding}</span>}
@@ -261,7 +291,15 @@ function KeyHeader({
         >
           <div className="mb-2 text-xs font-medium">Expire after</div>
           <div className="flex gap-1.5">
-            <Input autoFocus mono className="h-7" inputMode="numeric" placeholder="seconds" value={ttl} onChange={(e) => setTtl(e.target.value.replace(/\D/g, ""))} />
+            <Input
+              autoFocus
+              mono
+              className="h-7"
+              inputMode="numeric"
+              placeholder="seconds"
+              value={ttl}
+              onChange={(e) => setTtl(e.target.value.replace(/\D/g, ""))}
+            />
             <Button size="sm" variant="primary" type="submit" disabled={!Number(ttl)}>
               Set
             </Button>
@@ -273,7 +311,12 @@ function KeyHeader({
               ["1 day", 86400],
               ["1 week", 604800],
             ].map(([l, s]) => (
-              <button key={l} type="button" className="rounded border border-line px-1.5 py-0.5 text-[11px] hover:border-iris hover:text-iris" onClick={() => void setExpiry(s as number)}>
+              <button
+                key={l}
+                type="button"
+                className="rounded border border-line px-1.5 py-0.5 text-[11px] hover:border-iris hover:text-iris"
+                onClick={() => void setExpiry(s as number)}
+              >
                 {l}
               </button>
             ))}
@@ -316,7 +359,14 @@ function StringEditor({ value, truncated, onSave }: { value: string; truncated: 
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-3 text-xs">
         {pretty != null && (
-          <button className={cx("flex items-center gap-1 rounded px-1.5 py-0.5", format ? "bg-iris-soft text-iris" : "text-muted hover:bg-raised")} onClick={() => setFormat((v) => !v)}>
+          <button
+            type="button"
+            className={cx(
+              "flex items-center gap-1 rounded px-1.5 py-0.5",
+              format ? "bg-iris-soft text-iris" : "text-muted hover:bg-raised",
+            )}
+            onClick={() => setFormat((v) => !v)}
+          >
             <Braces className="size-3.5" /> JSON
           </button>
         )}
@@ -391,10 +441,25 @@ function ItemsTable({
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-3">
         <div className="relative w-64">
           <Search className="pointer-events-none absolute top-1.5 left-2 size-3.5 text-faint" />
-          <Input className="h-6 pl-7 text-xs" placeholder={`Filter ${formatInt(rows.length)} loaded`} value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <Input
+            className="h-6 pl-7 text-xs"
+            placeholder={`Filter ${formatInt(rows.length)} loaded`}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
         </div>
-        {data.truncated && <span className="text-xs text-warn">Showing the first {formatInt(rows.length)} of {formatInt(data.length)}</span>}
-        <Button size="sm" variant="subtle" className="ml-auto" icon={<Plus className="size-3.5" />} onClick={() => setAdding(addFields.map(() => ""))}>
+        {data.truncated && (
+          <span className="text-xs text-warn">
+            Showing the first {formatInt(rows.length)} of {formatInt(data.length)}
+          </span>
+        )}
+        <Button
+          size="sm"
+          variant="subtle"
+          className="ml-auto"
+          icon={<Plus className="size-3.5" />}
+          onClick={() => setAdding(addFields.map(() => ""))}
+        >
           {addLabel}
         </Button>
       </div>
@@ -407,7 +472,15 @@ function ItemsTable({
           }}
         >
           {addFields.map((f, i) => (
-            <Input key={f} autoFocus={i === 0} mono className="h-7 flex-1" placeholder={f} value={adding[i]} onChange={(e) => setAdding(adding.map((x, j) => (j === i ? e.target.value : x)))} />
+            <Input
+              key={f}
+              autoFocus={i === 0}
+              mono
+              className="h-7 flex-1"
+              placeholder={f}
+              value={adding[i]}
+              onChange={(e) => setAdding(adding.map((x, j) => (j === i ? e.target.value : x)))}
+            />
           ))}
           <Button size="sm" variant="primary" type="submit" disabled={!adding[0]}>
             {addLabel}
@@ -427,7 +500,13 @@ function ItemsTable({
           <thead className="sticky top-0 z-10 bg-panel">
             <tr>
               {columns.map((c, i) => (
-                <th key={c} className={cx("border-b border-line px-3 py-2 text-left font-sans text-2xs font-semibold tracking-wider text-faint uppercase", i === 0 && columns.length > 1 && "w-[34%]")}>
+                <th
+                  key={c}
+                  className={cx(
+                    "border-b border-line px-3 py-2 text-left font-sans text-2xs font-semibold tracking-wider text-faint uppercase",
+                    i === 0 && columns.length > 1 && "w-[34%]",
+                  )}
+                >
                   {c}
                 </th>
               ))}
@@ -440,7 +519,11 @@ function ItemsTable({
                 {r.map((cell, ci) => (
                   <td
                     key={ci}
-                    className={cx("px-3 py-1.5 break-all", ci === 0 && columns.length > 1 ? "text-fg" : "text-muted", numericCol === ci && "text-t-num tabular")}
+                    className={cx(
+                      "px-3 py-1.5 break-all",
+                      ci === 0 && columns.length > 1 ? "text-fg" : "text-muted",
+                      numericCol === ci && "text-t-num tabular",
+                    )}
                     onDoubleClick={() => editableCol === ci && onEdit && setEditing({ i, value: cell })}
                   >
                     {editing?.i === i && editableCol === ci ? (

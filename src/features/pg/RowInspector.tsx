@@ -1,21 +1,11 @@
-import { useEffect, useState } from "react";
 import { ArrowUpRight, Braces, KeyRound, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { DEFAULT_CELL, type GridColumn } from "../../components/grid/DataGrid";
-import { IconButton, cx } from "../../components/ui";
+import { cx, IconButton } from "../../components/ui";
 import { familyColor, familyGlyph, tryPrettyJson } from "../../lib/format";
 import type { Cell } from "../../lib/types";
 
-function FieldEditor({
-  col,
-  value,
-  editable,
-  onCommit,
-}: {
-  col: GridColumn;
-  value: Cell;
-  editable: boolean;
-  onCommit: (v: Cell) => void;
-}) {
+function FieldEditor({ col, value, editable, onCommit }: { col: GridColumn; value: Cell; editable: boolean; onCommit: (v: Cell) => void }) {
   const isDefault = value === DEFAULT_CELL;
   const [pretty, setPretty] = useState(col.family === "json");
   const shown = value == null || isDefault ? "" : pretty ? (tryPrettyJson(value) ?? value) : value;
@@ -28,7 +18,8 @@ function FieldEditor({
   const commit = () => {
     if (!editable) return;
     if (draft === shown) return;
-    if (pretty && value != null && tryPrettyJson(draft) != null && JSON.stringify(JSON.parse(draft)) === JSON.stringify(JSON.parse(value))) return;
+    if (pretty && value != null && tryPrettyJson(draft) != null && JSON.stringify(JSON.parse(draft)) === JSON.stringify(JSON.parse(value)))
+      return;
     onCommit(draft);
   };
 
@@ -60,6 +51,7 @@ function FieldEditor({
       />
       {col.family === "json" && value != null && !isDefault && (
         <button
+          type="button"
           className={cx("absolute top-1 right-1 rounded p-0.5", pretty ? "text-iris" : "text-faint hover:text-fg")}
           title={pretty ? "Show raw" : "Pretty print"}
           onClick={() => setPretty((v) => !v)}
@@ -103,19 +95,25 @@ export function RowInspector({
           {columns.map((col, i) => (
             <div key={col.name} className="mb-3">
               <div className="mb-1 flex items-center gap-1.5 text-xs">
-                <span className={cx("w-4 text-center font-mono text-[10px] font-semibold", familyColor[col.family])}>{familyGlyph[col.family]}</span>
+                <span className={cx("w-4 text-center font-mono text-[10px] font-semibold", familyColor[col.family])}>
+                  {familyGlyph[col.family]}
+                </span>
                 <span className="font-medium">{col.name}</span>
                 {col.isPk && <KeyRound className="size-3 text-warn" />}
                 <span className="truncate font-mono text-[10.5px] text-faint">{col.type}</span>
                 {col.fk && row[i] != null && (
-                  <button className="ml-auto flex items-center gap-0.5 text-[11px] text-info hover:underline" onClick={() => onOpenFk(col, row[i]!)}>
+                  <button
+                    type="button"
+                    className="ml-auto flex items-center gap-0.5 text-[11px] text-info hover:underline"
+                    onClick={() => onOpenFk(col, row[i]!)}
+                  >
                     {col.fk.table} <ArrowUpRight className="size-3" />
                   </button>
                 )}
               </div>
               <FieldEditor col={col} value={row[i]} editable={editable && !col.readOnly} onCommit={(v) => onEdit(i, v)} />
               {editable && col.nullable && row[i] != null && row[i] !== DEFAULT_CELL && (
-                <button className="mt-0.5 text-[10.5px] text-faint hover:text-iris" onClick={() => onEdit(i, null)}>
+                <button type="button" className="mt-0.5 text-[10.5px] text-faint hover:text-iris" onClick={() => onEdit(i, null)}>
                   Set NULL
                 </button>
               )}

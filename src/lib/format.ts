@@ -5,7 +5,9 @@ export function typeFamily(dataType: string, category?: string): TypeFamily {
   const t = dataType.toLowerCase();
   if (t.endsWith("[]") || t.startsWith("_") || category === "A") return "array";
   if (category === "E") return "enum";
-  if (/^(small|big)?int|^int[248]?$|^integer|^numeric|^decimal|^real|^double|^float|^money|^(big|small)?serial|^oid$/.test(t)) return "num";
+  // The integer alternatives are anchored: an unanchored `^int` also matches
+  // "interval", which is a time type.
+  if (/^(small|big)?int(2|4|8|eger)?$|^numeric|^decimal|^real$|^double|^float|^money$|^(big|small)?serial|^oid$/.test(t)) return "num";
   if (/^bool/.test(t)) return "bool";
   if (/^json/.test(t)) return "json";
   if (/^uuid/.test(t)) return "uuid";

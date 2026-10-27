@@ -1,5 +1,5 @@
 // One RPC surface for the whole app. Inside Tauri it goes through IPC; in a
-// plain browser (`pnpm dev:web`) it goes to the dev HTTP bridge.
+// plain browser (`pnpm bridge` + `pnpm dev`) it goes to the dev HTTP bridge.
 
 export interface RpcError {
   message: string;

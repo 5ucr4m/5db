@@ -1,27 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronDown, ChevronRight, Eye, EyeOff, FolderOpen, KeyRound, Link, PlugZap, XCircle } from "lucide-react";
-import { Button, Field, Input, Modal, Segmented, Select, Toggle, cx } from "../../components/ui";
-import { CONNECTION_COLORS, ENV_META, blankConnection, parseConnectionUrl } from "../../lib/connections";
+import { useEffect, useMemo, useState } from "react";
+import { Button, cx, Field, Input, Modal, Segmented, Select, Toggle } from "../../components/ui";
+import { blankConnection, CONNECTION_COLORS, ENV_META, parseConnectionUrl } from "../../lib/connections";
+import { formatDuration } from "../../lib/format";
 import { errorMessage, isTauri, rpc } from "../../lib/rpc";
 import type { ConnectionConfig, ConnectionKind, EnvTag } from "../../lib/types";
 import { useApp } from "../../store/app";
-import { formatDuration } from "../../lib/format";
 
-type TestState =
-  | { status: "idle" }
-  | { status: "running" }
-  | { status: "ok"; summary: string }
-  | { status: "error"; message: string };
+type TestState = { status: "idle" } | { status: "running" } | { status: "ok"; summary: string } | { status: "error"; message: string };
 
-export function ConnectionForm({
-  open,
-  initial,
-  onClose,
-}: {
-  open: boolean;
-  initial: ConnectionConfig | null;
-  onClose: () => void;
-}) {
+export function ConnectionForm({ open, initial, onClose }: { open: boolean; initial: ConnectionConfig | null; onClose: () => void }) {
   const saveConnection = useApp((s) => s.saveConnection);
   const openSession = useApp((s) => s.openSession);
   const toast = useApp((s) => s.toast);
@@ -71,7 +59,10 @@ export function ConnectionForm({
     const parsed = parseConnectionUrl(text);
     if (parsed) {
       setC((prev) => {
-        const base = parsed.kind && parsed.kind !== prev.kind ? { ...blankConnection(parsed.kind), id: prev.id, color: prev.color, env: prev.env } : prev;
+        const base =
+          parsed.kind && parsed.kind !== prev.kind
+            ? { ...blankConnection(parsed.kind), id: prev.id, color: prev.color, env: prev.env }
+            : prev;
         const next = { ...base, ...parsed } as ConnectionConfig;
         if (!prev.name) next.name = parsed.kind === "redis" ? `${parsed.host}` : `${parsed.database} on ${parsed.host}`;
         return next;
@@ -84,7 +75,10 @@ export function ConnectionForm({
   const runTest = async () => {
     setTest({ status: "running" });
     try {
-      const r = await rpc<{ version: string; latencyMs: number; pong?: string; viaSsh?: boolean }>("connections.test", c as unknown as Record<string, unknown>);
+      const r = await rpc<{ version: string; latencyMs: number; pong?: string; viaSsh?: boolean }>(
+        "connections.test",
+        c as unknown as Record<string, unknown>,
+      );
       const version = c.kind === "postgres" ? r.version.split(" on ")[0].split(",")[0] : `Redis ${r.version}`;
       setTest({ status: "ok", summary: `${version} · ${formatDuration(r.latencyMs)}${r.viaSsh ? " · via SSH" : ""}` });
     } catch (e) {
@@ -162,19 +156,32 @@ export function ConnectionForm({
           <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Color">
             {CONNECTION_COLORS.map((col) => (
               <button
+                type="button"
                 key={col}
                 role="radio"
                 aria-checked={c.color === col}
                 aria-label={`Color ${col}`}
                 onClick={() => set("color", col)}
-                className={cx("size-5 rounded-full transition-transform hover:scale-110", c.color === col && "ring-2 ring-fg ring-offset-2 ring-offset-panel")}
+                className={cx(
+                  "size-5 rounded-full transition-transform hover:scale-110",
+                  c.color === col && "ring-2 ring-fg ring-offset-2 ring-offset-panel",
+                )}
                 style={{ background: col }}
               />
             ))}
           </div>
         </div>
 
-        <Field label="Paste a connection URL" hint={urlInvalid ? <span className="text-danger">Not a postgres:// or redis:// URL.</span> : "Fills in the fields below. Nothing is saved until you press Save."}>
+        <Field
+          label="Paste a connection URL"
+          hint={
+            urlInvalid ? (
+              <span className="text-danger">Not a postgres:// or redis:// URL.</span>
+            ) : (
+              "Fills in the fields below. Nothing is saved until you press Save."
+            )
+          }
+        >
           <div className="relative">
             <Link className="pointer-events-none absolute top-2 left-2.5 size-4 text-faint" />
             <Input
@@ -189,7 +196,12 @@ export function ConnectionForm({
 
         <div className="grid grid-cols-[1fr_auto] gap-3">
           <Field label="Name">
-            <Input autoFocus value={c.name} placeholder={c.kind === "postgres" ? "Shop production" : "Session cache"} onChange={(e) => set("name", e.target.value)} />
+            <Input
+              autoFocus
+              value={c.name}
+              placeholder={c.kind === "postgres" ? "Shop production" : "Session cache"}
+              onChange={(e) => set("name", e.target.value)}
+            />
           </Field>
           <Field label="Environment">
             <Segmented size="md" value={c.env} onChange={(v) => set("env", v)} options={envOptions} />
@@ -201,17 +213,33 @@ export function ConnectionForm({
             <Input mono value={c.host} placeholder="localhost" onChange={(e) => set("host", e.target.value)} />
           </Field>
           <Field label="Port">
-            <Input mono inputMode="numeric" value={c.port || ""} onChange={(e) => set("port", Number(e.target.value.replace(/\D/g, "")) || 0)} />
+            <Input
+              mono
+              inputMode="numeric"
+              value={c.port || ""}
+              onChange={(e) => set("port", Number(e.target.value.replace(/\D/g, "")) || 0)}
+            />
           </Field>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <Field label={c.kind === "postgres" ? "User" : "Username (ACL)"}>
-            <Input mono value={c.user} placeholder={c.kind === "postgres" ? "postgres" : "default"} onChange={(e) => set("user", e.target.value)} />
+            <Input
+              mono
+              value={c.user}
+              placeholder={c.kind === "postgres" ? "postgres" : "default"}
+              onChange={(e) => set("user", e.target.value)}
+            />
           </Field>
           <Field label="Password">
             <div className="relative">
-              <Input mono type={showPw ? "text" : "password"} value={c.password} className="pr-8" onChange={(e) => set("password", e.target.value)} />
+              <Input
+                mono
+                type={showPw ? "text" : "password"}
+                value={c.password}
+                className="pr-8"
+                onChange={(e) => set("password", e.target.value)}
+              />
               <button
                 type="button"
                 className="absolute top-1.5 right-1.5 rounded p-0.5 text-faint hover:text-fg"
@@ -241,7 +269,12 @@ export function ConnectionForm({
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <Field label="Database index">
-              <Input mono inputMode="numeric" value={c.redisDb} onChange={(e) => set("redisDb", Number(e.target.value.replace(/\D/g, "")) || 0)} />
+              <Input
+                mono
+                inputMode="numeric"
+                value={c.redisDb}
+                onChange={(e) => set("redisDb", Number(e.target.value.replace(/\D/g, "")) || 0)}
+              />
             </Field>
             <div className="flex items-end pb-1.5">
               <Toggle checked={c.tls} onChange={(v) => set("tls", v)} label="Use TLS (rediss://)" />
@@ -297,7 +330,9 @@ function SshSection({ c, set }: { c: ConnectionConfig; set: <K extends keyof Con
         {open ? <ChevronDown className="size-3.5 text-faint" /> : <ChevronRight className="size-3.5 text-faint" />}
         <KeyRound className="size-3.5 text-iris" />
         <span className="font-medium">SSH tunnel</span>
-        <span className="text-xs text-muted">{c.sshEnabled ? `through ${c.sshUser || "…"}@${c.sshHost || "…"}` : "reach a database behind a bastion"}</span>
+        <span className="text-xs text-muted">
+          {c.sshEnabled ? `through ${c.sshUser || "…"}@${c.sshHost || "…"}` : "reach a database behind a bastion"}
+        </span>
       </button>
       {open && (
         <div className="flex flex-col gap-3 border-t border-line p-3">
@@ -305,14 +340,20 @@ function SshSection({ c, set }: { c: ConnectionConfig; set: <K extends keyof Con
           {c.sshEnabled && (
             <>
               <p className="text-xs text-muted">
-                The database host and port above are resolved from the SSH server, so use the address the bastion sees (often an internal name).
+                The database host and port above are resolved from the SSH server, so use the address the bastion sees (often an internal
+                name).
               </p>
               <div className="grid grid-cols-[1fr_96px] gap-3">
                 <Field label="SSH host">
                   <Input mono placeholder="bastion.example.com" value={c.sshHost} onChange={(e) => set("sshHost", e.target.value)} />
                 </Field>
                 <Field label="SSH port">
-                  <Input mono inputMode="numeric" value={c.sshPort || ""} onChange={(e) => set("sshPort", Number(e.target.value.replace(/\D/g, "")) || 0)} />
+                  <Input
+                    mono
+                    inputMode="numeric"
+                    value={c.sshPort || ""}
+                    onChange={(e) => set("sshPort", Number(e.target.value.replace(/\D/g, "")) || 0)}
+                  />
                 </Field>
               </div>
               <div className="grid grid-cols-[1fr_auto] items-end gap-3">
@@ -334,8 +375,19 @@ function SshSection({ c, set }: { c: ConnectionConfig; set: <K extends keyof Con
               {auth === "password" ? (
                 <Field label="SSH password">
                   <div className="relative">
-                    <Input mono type={showPw ? "text" : "password"} className="pr-8" value={c.sshPassword} onChange={(e) => set("sshPassword", e.target.value)} />
-                    <button type="button" className="absolute top-1.5 right-1.5 rounded p-0.5 text-faint hover:text-fg" aria-label={showPw ? "Hide SSH password" : "Show SSH password"} onClick={() => setShowPw((v) => !v)}>
+                    <Input
+                      mono
+                      type={showPw ? "text" : "password"}
+                      className="pr-8"
+                      value={c.sshPassword}
+                      onChange={(e) => set("sshPassword", e.target.value)}
+                    />
+                    <button
+                      type="button"
+                      className="absolute top-1.5 right-1.5 rounded p-0.5 text-faint hover:text-fg"
+                      aria-label={showPw ? "Hide SSH password" : "Show SSH password"}
+                      onClick={() => setShowPw((v) => !v)}
+                    >
                       {showPw ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                     </button>
                   </div>
@@ -344,9 +396,21 @@ function SshSection({ c, set }: { c: ConnectionConfig; set: <K extends keyof Con
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Private key file">
                     <div className="flex gap-1">
-                      <Input mono placeholder="~/.ssh/id_ed25519" value={c.sshKeyPath} onChange={(e) => set("sshKeyPath", e.target.value)} />
+                      <Input
+                        mono
+                        placeholder="~/.ssh/id_ed25519"
+                        value={c.sshKeyPath}
+                        onChange={(e) => set("sshKeyPath", e.target.value)}
+                      />
                       {isTauri && (
-                        <Button type="button" size="sm" className="h-8" icon={<FolderOpen className="size-3.5" />} onClick={pickKey} aria-label="Choose key file" />
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-8"
+                          icon={<FolderOpen className="size-3.5" />}
+                          onClick={pickKey}
+                          aria-label="Choose key file"
+                        />
                       )}
                     </div>
                   </Field>

@@ -1,10 +1,20 @@
 import { create } from "zustand";
-import { errorMessage, rpc } from "../lib/rpc";
 import { uid } from "../lib/format";
+import { errorMessage, rpc } from "../lib/rpc";
 import type { ConnectionConfig, Filter, ObjectKind, PgObjects, PgServerInfo, RedisInfo } from "../lib/types";
 
 export type Tab =
-  | { id: string; kind: "table"; title: string; schema: string; name: string; objectKind: ObjectKind; preview?: boolean; initialFilters?: Filter[]; view?: "data" | "structure" | "ddl" }
+  | {
+      id: string;
+      kind: "table";
+      title: string;
+      schema: string;
+      name: string;
+      objectKind: ObjectKind;
+      preview?: boolean;
+      initialFilters?: Filter[];
+      view?: "data" | "structure" | "ddl";
+    }
   | { id: string; kind: "query"; title: string; sql?: string; savedId?: string; autorun?: boolean }
   | { id: string; kind: "function"; title: string; schema: string; name: string; oid: number; preview?: boolean }
   | { id: string; kind: "activity"; title: string }
@@ -139,9 +149,7 @@ export const useApp = create<AppStore>((set, get) => {
           tabs: s.tabs.length ? s.tabs : [{ id: uid(), kind: "redis-console", title: "Console" }],
         }));
         set((st) => ({
-          sessions: st.sessions.map((s) =>
-            s.id === session.id && !s.activeTabId ? { ...s, activeTabId: s.tabs[0]?.id ?? null } : s,
-          ),
+          sessions: st.sessions.map((s) => (s.id === session.id && !s.activeTabId ? { ...s, activeTabId: s.tabs[0]?.id ?? null } : s)),
         }));
       }
     } catch (e) {
@@ -157,13 +165,14 @@ export const useApp = create<AppStore>((set, get) => {
     toasts: [],
     confirmRequest: null,
     paletteOpen: false,
-    theme: ((() => {
-      try {
-        return localStorage.getItem("5db.theme");
-      } catch {
-        return null;
-      }
-    })() as Theme) || "system",
+    theme:
+      ((() => {
+        try {
+          return localStorage.getItem("5db.theme");
+        } catch {
+          return null;
+        }
+      })() as Theme) || "system",
 
     async loadConnections() {
       try {
@@ -229,8 +238,7 @@ export const useApp = create<AppStore>((set, get) => {
       set((st) => {
         const idx = st.sessions.findIndex((x) => x.id === id);
         const sessions = st.sessions.filter((x) => x.id !== id);
-        const activeSessionId =
-          st.activeSessionId === id ? (sessions[Math.min(idx, sessions.length - 1)]?.id ?? null) : st.activeSessionId;
+        const activeSessionId = st.activeSessionId === id ? (sessions[Math.min(idx, sessions.length - 1)]?.id ?? null) : st.activeSessionId;
         return { sessions, activeSessionId };
       });
     },

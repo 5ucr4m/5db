@@ -1,5 +1,5 @@
-import type { Cell } from "./types";
 import { isTauri, rpc } from "./rpc";
+import type { Cell } from "./types";
 
 function csvField(v: Cell): string {
   if (v == null) return "";
@@ -17,16 +17,22 @@ export function toTsv(columns: string[] | null, rows: Cell[][]): string {
 }
 
 export function toJson(columns: string[], rows: Cell[][]): string {
-  return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, i) => [c, r[i]]))), null, 2) + "\n";
+  return (
+    JSON.stringify(
+      rows.map((r) => Object.fromEntries(columns.map((c, i) => [c, r[i]]))),
+      null,
+      2,
+    ) + "\n"
+  );
 }
 
 export function toMarkdown(columns: string[], rows: Cell[][]): string {
   const esc = (v: Cell) => (v == null ? "NULL" : v.replace(/\|/g, "\\|").replace(/\n/g, " "));
-  return [
-    `| ${columns.join(" | ")} |`,
-    `| ${columns.map(() => "---").join(" | ")} |`,
-    ...rows.map((r) => `| ${r.map(esc).join(" | ")} |`),
-  ].join("\n") + "\n";
+  return (
+    [`| ${columns.join(" | ")} |`, `| ${columns.map(() => "---").join(" | ")} |`, ...rows.map((r) => `| ${r.map(esc).join(" | ")} |`)].join(
+      "\n",
+    ) + "\n"
+  );
 }
 
 /** Asks for a destination path. Returns null if the user cancelled. In the browser build, `null` path means "download". */

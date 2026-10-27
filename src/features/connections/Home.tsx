@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy, Database, MoreHorizontal, Pencil, Plus, Search, Trash2, Zap } from "lucide-react";
-import { Button, Input, Kbd, MenuItem, MenuSeparator, Popover, Spinner, cx } from "../../components/ui";
-import { ENV_META, connectionSummary, monogram } from "../../lib/connections";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button, cx, Input, Kbd, MenuItem, MenuSeparator, Popover, Spinner } from "../../components/ui";
+import { connectionSummary, ENV_META, monogram } from "../../lib/connections";
 import { relativeTime } from "../../lib/format";
 import { errorMessage } from "../../lib/rpc";
 import type { ConnectionConfig } from "../../lib/types";
@@ -82,11 +82,15 @@ export function Home() {
                 <div className="flex flex-wrap gap-2">
                   {recent.map((c) => (
                     <button
+                      type="button"
                       key={c.id}
                       onClick={() => openSession(c.id)}
                       className="flex items-center gap-2 rounded-full border border-line bg-panel py-1 pr-3 pl-1 text-sm transition-colors hover:border-iris-line hover:bg-iris-soft"
                     >
-                      <span className="flex size-6 items-center justify-center rounded-full text-[10px] font-bold text-white" style={{ background: c.color }}>
+                      <span
+                        className="flex size-6 items-center justify-center rounded-full text-[10px] font-bold text-white"
+                        style={{ background: c.color }}
+                      >
                         {monogram(c.name)}
                       </span>
                       {c.name}
@@ -110,6 +114,7 @@ export function Home() {
                 />
               ))}
               <button
+                type="button"
                 onClick={() => openForm(null)}
                 className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-iris hover:text-iris"
               >
@@ -209,11 +214,16 @@ function ConnectionCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate font-display text-[15px] font-semibold">{c.name}</span>
-            {connecting ? <Spinner className="size-3" /> : connected && <span className="size-1.5 shrink-0 rounded-full bg-ok" title="Connected" />}
+            {connecting ? (
+              <Spinner className="size-3" />
+            ) : (
+              connected && <span className="size-1.5 shrink-0 rounded-full bg-ok" title="Connected" />
+            )}
           </div>
           <div className="mt-0.5 truncate font-mono text-[11px] text-muted">{connectionSummary(c)}</div>
         </div>
         <button
+          type="button"
           ref={moreRef}
           aria-label="Connection actions"
           className="rounded-md p-1 text-faint opacity-0 transition-opacity group-hover:opacity-100 hover:bg-raised hover:text-fg focus:opacity-100"
@@ -268,8 +278,8 @@ function FirstRun({ onCreate }: { onCreate: () => void }) {
           Your tables, keys and queries. <span className="text-iris">In one quiet window.</span>
         </h2>
         <p className="mt-4 max-w-md text-[15px] text-muted">
-          Save a connection once and reopen it in a click. Browse tables, filter and sort without writing SQL, edit rows safely, and
-          keep every query you run.
+          Save a connection once and reopen it in a click. Browse tables, filter and sort without writing SQL, edit rows safely, and keep
+          every query you run.
         </p>
         <div className="mt-6 flex items-center gap-3">
           <Button variant="primary" icon={<Plus className="size-4" />} onClick={onCreate}>
@@ -302,7 +312,10 @@ function FakeGridArt() {
     ["◷", "created", "text-t-time"],
   ];
   return (
-    <div aria-hidden className="relative rotate-[-1.5deg] overflow-hidden rounded-xl border border-line bg-panel font-mono text-[11px] shadow-[0_30px_60px_-30px_rgb(80_50_200/0.55)]">
+    <div
+      aria-hidden
+      className="relative rotate-[-1.5deg] overflow-hidden rounded-xl border border-line bg-panel font-mono text-[11px] shadow-[0_30px_60px_-30px_rgb(80_50_200/0.55)]"
+    >
       <div className="flex items-center gap-1.5 border-b border-line px-3 py-2 font-sans text-xs">
         <span className="size-2 rounded-full bg-iris" />
         <span className="font-semibold">customers</span>

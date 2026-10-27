@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { Bookmark, Gauge, Library, Play, PlayCircle, Square } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, IconButton, Input, Modal, Resizer, useResizable } from "../../components/ui";
 import { errorMessage, rpc } from "../../lib/rpc";
 import { destructiveReason } from "../../lib/sql";
 import type { ExecuteResult, SavedQuery } from "../../lib/types";
-import { useApp, useConnection, type Session, type Tab } from "../../store/app";
+import { type Session, type Tab, useApp, useConnection } from "../../store/app";
+import { SqlEditor, type SqlEditorHandle } from "./LazySqlEditor";
 import { LibraryPanel, notifyHistory } from "./LibraryPanel";
 import { ResultsPanel } from "./ResultsPanel";
-import { SqlEditor, type SqlEditorHandle } from "./LazySqlEditor";
 
 type QueryTabT = Extract<Tab, { kind: "query" }>;
 
@@ -162,10 +162,24 @@ export function QueryTab({ session, tab, active }: { session: Session; tab: Quer
               Run
             </Button>
           )}
-          <Button size="sm" variant="ghost" icon={<PlayCircle className="size-3.5" />} onClick={runAll} disabled={running} title="Run every statement (⇧⌘↵)">
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<PlayCircle className="size-3.5" />}
+            onClick={runAll}
+            disabled={running}
+            title="Run every statement (⇧⌘↵)"
+          >
             Run all
           </Button>
-          <Button size="sm" variant="ghost" icon={<Gauge className="size-3.5" />} onClick={explain} disabled={running} title="Show the query plan">
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Gauge className="size-3.5" />}
+            onClick={explain}
+            disabled={running}
+            title="Show the query plan"
+          >
             Explain
           </Button>
           <div className="mx-1 h-4 w-px bg-line" />
@@ -174,7 +188,11 @@ export function QueryTab({ session, tab, active }: { session: Session; tab: Quer
           </Button>
           <div className="ml-auto flex items-center gap-2">
             <span className="font-mono text-[11px] text-faint">{session.database}</span>
-            <IconButton label={libraryOpen ? "Hide history and saved queries" : "Show history and saved queries"} active={libraryOpen} onClick={() => setLibraryOpen((v) => !v)}>
+            <IconButton
+              label={libraryOpen ? "Hide history and saved queries" : "Show history and saved queries"}
+              active={libraryOpen}
+              onClick={() => setLibraryOpen((v) => !v)}
+            >
               <Library className="size-4" />
             </IconButton>
           </div>
@@ -273,7 +291,9 @@ export function QueryTab({ session, tab, active }: { session: Session; tab: Quer
           }}
         >
           <Input autoFocus placeholder="Monthly revenue by status" value={saveName} onChange={(e) => setSaveName(e.target.value)} />
-          <p className="mt-2 text-xs text-muted">Saved queries live with this connection and show up in the library and the command palette.</p>
+          <p className="mt-2 text-xs text-muted">
+            Saved queries live with this connection and show up in the library and the command palette.
+          </p>
         </form>
       </Modal>
     </div>

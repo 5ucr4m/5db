@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDown, ChevronRight, Folder, Gauge, List, ListTree, Plus, RefreshCw, Search, Terminal, X } from "lucide-react";
-import { IconButton, Input, Select, Spinner, cx } from "../../components/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cx, IconButton, Input, Select, Spinner } from "../../components/ui";
 import { formatInt, formatTtl } from "../../lib/format";
 import { errorMessage, rpc } from "../../lib/rpc";
 import type { RedisKey, RedisScanPage } from "../../lib/types";
-import { useApp, type Session } from "../../store/app";
+import { type Session, useApp } from "../../store/app";
 import { TypeBadge } from "./common";
 import { NewKeyDialog } from "./NewKeyDialog";
 
@@ -50,7 +50,8 @@ function buildTree(keys: RedisKey[], expanded: Set<string>, sep = ":"): Node[] {
       out.push({ kind: "folder", path, label: name, depth, count: child.count, open });
       if (open) walk(child, path, depth + 1);
     }
-    for (const k of [...f.keys].sort((a, b) => a.key.localeCompare(b.key))) out.push({ kind: "key", k, label: k.key.slice(prefix.length) || k.key, depth });
+    for (const k of [...f.keys].sort((a, b) => a.key.localeCompare(b.key)))
+      out.push({ kind: "key", k, label: k.key.slice(prefix.length) || k.key, depth });
   };
   walk(root, "", 0);
   return out;
@@ -124,7 +125,10 @@ export function RedisSidebar({ session }: { session: Session }) {
   }, [mode]);
 
   const nodes: Node[] = useMemo(
-    () => (mode === "tree" && !pattern ? buildTree(keys, expanded) : [...keys].sort((a, b) => a.key.localeCompare(b.key)).map((k) => ({ kind: "key" as const, k, label: k.key, depth: 0 }))),
+    () =>
+      mode === "tree" && !pattern
+        ? buildTree(keys, expanded)
+        : [...keys].sort((a, b) => a.key.localeCompare(b.key)).map((k) => ({ kind: "key" as const, k, label: k.key, depth: 0 })),
     [keys, expanded, mode, pattern],
   );
 
@@ -171,9 +175,19 @@ export function RedisSidebar({ session }: { session: Session }) {
       <div className="flex shrink-0 gap-1 px-2 pb-1">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute top-2 left-2 size-3.5 text-faint" />
-          <Input className="h-7 pr-6 pl-7 font-mono text-xs" placeholder="user:* or any text" value={pattern} onChange={(e) => setPattern(e.target.value)} />
+          <Input
+            className="h-7 pr-6 pl-7 font-mono text-xs"
+            placeholder="user:* or any text"
+            value={pattern}
+            onChange={(e) => setPattern(e.target.value)}
+          />
           {pattern && (
-            <button className="absolute top-2 right-2 text-faint hover:text-fg" onClick={() => setPattern("")} aria-label="Clear pattern">
+            <button
+              type="button"
+              className="absolute top-2 right-2 text-faint hover:text-fg"
+              onClick={() => setPattern("")}
+              aria-label="Clear pattern"
+            >
               <X className="size-3.5" />
             </button>
           )}
@@ -199,7 +213,9 @@ export function RedisSidebar({ session }: { session: Session }) {
 
       <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-auto px-1.5">
         {keys.length === 0 && !loading ? (
-          <p className="px-3 py-4 text-xs text-muted">{pattern || keyType ? "No key matches." : "This database is empty. Add a key with +."}</p>
+          <p className="px-3 py-4 text-xs text-muted">
+            {pattern || keyType ? "No key matches." : "This database is empty. Add a key with +."}
+          </p>
         ) : (
           <div style={{ height: v.getTotalSize(), position: "relative" }}>
             {v.getVirtualItems().map((vi) => {
@@ -208,6 +224,7 @@ export function RedisSidebar({ session }: { session: Session }) {
               if (n.kind === "folder")
                 return (
                   <button
+                    type="button"
                     key={vi.key}
                     style={style}
                     className="flex items-center gap-1.5 rounded-md pr-2 text-left text-[12.5px] text-muted hover:bg-raised hover:text-fg"
@@ -228,12 +245,16 @@ export function RedisSidebar({ session }: { session: Session }) {
                 );
               return (
                 <button
+                  type="button"
                   key={vi.key}
                   style={style}
                   title={n.k.key}
                   onClick={() => openTab(session.id, { kind: "redis-key", title: n.k.key, key: n.k.key }, { preview: true })}
                   onDoubleClick={() => openTab(session.id, { kind: "redis-key", title: n.k.key, key: n.k.key })}
-                  className={cx("flex items-center gap-2 rounded-md pr-2 text-left", activeKey === n.k.key ? "bg-iris-soft" : "hover:bg-raised")}
+                  className={cx(
+                    "flex items-center gap-2 rounded-md pr-2 text-left",
+                    activeKey === n.k.key ? "bg-iris-soft" : "hover:bg-raised",
+                  )}
                 >
                   <TypeBadge type={n.k.type} />
                   <span className="truncate font-mono text-[12px]">{n.label}</span>
@@ -253,13 +274,14 @@ export function RedisSidebar({ session }: { session: Session }) {
       <div className="shrink-0 border-t border-line px-3 py-1 text-[11px] text-faint">
         {formatInt(keys.length)} {done ? "" : "loaded "}of {formatInt(dbSize)} keys
         {!done && !loading && (
-          <button className="ml-2 text-iris hover:underline" onClick={() => void scan(false)}>
+          <button type="button" className="ml-2 text-iris hover:underline" onClick={() => void scan(false)}>
             Load more
           </button>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-0.5 border-t border-line p-1.5">
         <button
+          type="button"
           onClick={() => openTab(session.id, { kind: "redis-console", title: "Console" })}
           className="flex h-7 flex-1 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-iris hover:bg-iris-soft"
         >

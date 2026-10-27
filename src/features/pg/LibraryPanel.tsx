@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Bookmark, Clock, Play, Search, Trash2 } from "lucide-react";
-import { IconButton, Input, Segmented, cx } from "../../components/ui";
+import { useCallback, useEffect, useState } from "react";
+import { cx, IconButton, Input, Segmented } from "../../components/ui";
 import { clockTime, formatDuration, formatInt } from "../../lib/format";
 import { errorMessage, rpc } from "../../lib/rpc";
 import type { HistoryEntry, SavedQuery } from "../../lib/types";
@@ -61,7 +61,12 @@ export function HistoryRow({
       onDoubleClick={onRun}
       title="Click to open in the editor · double-click to run"
     >
-      <pre className={cx("overflow-hidden font-mono text-[11.5px] leading-snug whitespace-pre-wrap text-fg", compact ? "line-clamp-3" : "line-clamp-4")}>
+      <pre
+        className={cx(
+          "overflow-hidden font-mono text-[11.5px] leading-snug whitespace-pre-wrap text-fg",
+          compact ? "line-clamp-3" : "line-clamp-4",
+        )}
+      >
         {h.sql.trim()}
       </pre>
       <div className="mt-1 flex items-center gap-2 text-[11px] text-faint">
@@ -74,7 +79,11 @@ export function HistoryRow({
             <span className="truncate">{h.error}</span>
           </span>
         ) : (
-          h.rows != null && <span className="tabular">· {formatInt(h.rows)} {h.rows === 1 ? "row" : "rows"}</span>
+          h.rows != null && (
+            <span className="tabular">
+              · {formatInt(h.rows)} {h.rows === 1 ? "row" : "rows"}
+            </span>
+          )
         )}
         {!compact && h.database && <span className="ml-auto font-mono">{h.database}</span>}
       </div>
@@ -116,19 +125,42 @@ export function LibraryPanel({
           value={mode}
           onChange={setMode}
           options={[
-            { value: "history", label: <span className="flex items-center gap-1"><Clock className="size-3" />History</span> },
-            { value: "saved", label: <span className="flex items-center gap-1"><Bookmark className="size-3" />Saved · {saved.items.length}</span> },
+            {
+              value: "history",
+              label: (
+                <span className="flex items-center gap-1">
+                  <Clock className="size-3" />
+                  History
+                </span>
+              ),
+            },
+            {
+              value: "saved",
+              label: (
+                <span className="flex items-center gap-1">
+                  <Bookmark className="size-3" />
+                  Saved · {saved.items.length}
+                </span>
+              ),
+            },
           ]}
         />
         <div className="relative">
           <Search className="pointer-events-none absolute top-2 left-2 size-3.5 text-faint" />
-          <Input className="h-7 pl-7 text-xs" placeholder={mode === "history" ? "Search history" : "Search saved queries"} value={search} onChange={(e) => setSearch(e.target.value)} />
+          <Input
+            className="h-7 pl-7 text-xs"
+            placeholder={mode === "history" ? "Search history" : "Search saved queries"}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         {mode === "history" ? (
           history.items.length === 0 ? (
-            <p className="p-4 text-center text-xs text-muted">{search ? "No query matches." : "Queries you run appear here, newest first."}</p>
+            <p className="p-4 text-center text-xs text-muted">
+              {search ? "No query matches." : "Queries you run appear here, newest first."}
+            </p>
           ) : (
             history.items.map((h) => (
               <HistoryRow
@@ -145,7 +177,9 @@ export function LibraryPanel({
             ))
           )
         ) : savedFiltered.length === 0 ? (
-          <p className="p-4 text-center text-xs text-muted">{search ? "No saved query matches." : "Press ⌘S in the editor to save a query with a name."}</p>
+          <p className="p-4 text-center text-xs text-muted">
+            {search ? "No saved query matches." : "Press ⌘S in the editor to save a query with a name."}
+          </p>
         ) : (
           savedFiltered.map((q) => (
             <div

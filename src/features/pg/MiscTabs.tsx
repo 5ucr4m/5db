@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
 import { Clock, RefreshCw, Search, Trash2 } from "lucide-react";
-import { Badge, Button, EmptyState, IconButton, Input, Spinner, Toggle, cx } from "../../components/ui";
+import { useCallback, useEffect, useState } from "react";
+import { Badge, Button, cx, EmptyState, IconButton, Input, Spinner, Toggle } from "../../components/ui";
 import { formatDuration } from "../../lib/format";
 import { errorMessage, rpc } from "../../lib/rpc";
-import { useApp, type Session, type Tab } from "../../store/app";
-import { HistoryRow, notifyHistory, useHistory } from "./LibraryPanel";
+import { type Session, type Tab, useApp } from "../../store/app";
 import { SqlEditor } from "./LazySqlEditor";
+import { HistoryRow, notifyHistory, useHistory } from "./LibraryPanel";
 
 export function HistoryTab({ session }: { session: Session }) {
   const [search, setSearch] = useState("");
@@ -14,7 +14,8 @@ export function HistoryTab({ session }: { session: Session }) {
   const confirm = useApp((s) => s.confirm);
   const [onlyErrors, setOnlyErrors] = useState(false);
   const shown = onlyErrors ? items.filter((h) => h.error) : items;
-  const open = (sql: string, autorun: boolean) => openTab(session.id, { kind: "query", title: autorun ? "Re-run" : "From history", sql, autorun });
+  const open = (sql: string, autorun: boolean) =>
+    openTab(session.id, { kind: "query", title: autorun ? "Re-run" : "From history", sql, autorun });
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -22,7 +23,13 @@ export function HistoryTab({ session }: { session: Session }) {
         <h2 className="font-display text-[15px] font-semibold">Query history</h2>
         <div className="relative w-80">
           <Search className="pointer-events-none absolute top-2 left-2.5 size-3.5 text-faint" />
-          <Input autoFocus className="h-7 pl-8 text-xs" placeholder="Search the SQL of every query you ran" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <Input
+            autoFocus
+            className="h-7 pl-8 text-xs"
+            placeholder="Search the SQL of every query you ran"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
         <Toggle checked={onlyErrors} onChange={setOnlyErrors} label={<span className="text-xs">Only failed</span>} />
         <div className="ml-auto">
@@ -32,7 +39,15 @@ export function HistoryTab({ session }: { session: Session }) {
             icon={<Trash2 className="size-3.5" />}
             disabled={!items.length}
             onClick={async () => {
-              if (!(await confirm({ title: "Clear query history?", body: "Every recorded query for this connection is removed. Saved queries are kept.", confirmLabel: "Clear history", danger: true }))) return;
+              if (
+                !(await confirm({
+                  title: "Clear query history?",
+                  body: "Every recorded query for this connection is removed. Saved queries are kept.",
+                  confirmLabel: "Clear history",
+                  danger: true,
+                }))
+              )
+                return;
               await rpc("history.clear", { connectionId: session.connectionId });
               notifyHistory();
             }}
@@ -107,7 +122,16 @@ export function ActivityTab({ session, active }: { session: Session; active: boo
   }, [load, auto, active]);
 
   const signal = async (pid: number, terminate: boolean) => {
-    if (terminate && !(await confirm({ title: `Terminate backend ${pid}?`, body: "The client connection is closed and its open transaction rolled back.", confirmLabel: "Terminate", danger: true }))) return;
+    if (
+      terminate &&
+      !(await confirm({
+        title: `Terminate backend ${pid}?`,
+        body: "The client connection is closed and its open transaction rolled back.",
+        confirmLabel: "Terminate",
+        danger: true,
+      }))
+    )
+      return;
     try {
       const ok = await rpc<boolean>("pg.signal", { connectionId: session.connectionId, database: session.database, pid, terminate });
       toast(ok ? "ok" : "error", ok ? `${terminate ? "Terminated" : "Cancelled"} ${pid}` : `Could not signal ${pid}`);
@@ -202,7 +226,12 @@ export function FunctionTab({ session, tab }: { session: Session; tab: Extract<T
         <span className="font-mono text-xs text-muted">
           {tab.schema}.{tab.name}
         </span>
-        <Button size="sm" variant="ghost" className="ml-auto" onClick={() => openTab(session.id, { kind: "query", title: `Edit ${tab.name}`, sql: def })}>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto"
+          onClick={() => openTab(session.id, { kind: "query", title: `Edit ${tab.name}`, sql: def })}
+        >
           Open in editor
         </Button>
       </div>

@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
 import { Code2, Plus, X } from "lucide-react";
-import { Button, IconButton, Input, Segmented, Select, cx } from "../../components/ui";
-import { familyColor, familyGlyph, typeFamily, uid, type TypeFamily } from "../../lib/format";
+import { useEffect, useRef } from "react";
+import { Button, cx, IconButton, Input, Segmented, Select } from "../../components/ui";
+import { familyColor, familyGlyph, type TypeFamily, typeFamily, uid } from "../../lib/format";
 import type { ColumnInfo, Filter, FilterOp } from "../../lib/types";
 
 const OPS: { op: FilterOp; label: string; families?: TypeFamily[]; arity: 0 | 1 | 2 }[] = [
@@ -95,7 +95,12 @@ export function FilterBar({
                 onChange={(e) => update(f.id, { enabled: e.target.checked })}
               />
               <div className="relative w-48 shrink-0">
-                <span className={cx("pointer-events-none absolute top-[7px] left-2 w-4 text-center font-mono text-[10px] font-semibold", familyColor[fam])}>
+                <span
+                  className={cx(
+                    "pointer-events-none absolute top-[7px] left-2 w-4 text-center font-mono text-[10px] font-semibold",
+                    familyColor[fam],
+                  )}
+                >
                   {familyGlyph[fam]}
                 </span>
                 <Select
@@ -126,7 +131,11 @@ export function FilterBar({
               </Select>
               {arity >= 1 &&
                 (enumList && (f.op === "eq" || f.op === "neq") ? (
-                  <Select className="h-7 min-w-0 flex-1 font-mono text-xs" value={f.value ?? ""} onChange={(e) => update(f.id, { value: e.target.value })}>
+                  <Select
+                    className="h-7 min-w-0 flex-1 font-mono text-xs"
+                    value={f.value ?? ""}
+                    onChange={(e) => update(f.id, { value: e.target.value })}
+                  >
                     <option value="" disabled>
                       choose a value
                     </option>
@@ -159,7 +168,12 @@ export function FilterBar({
               {arity === 2 && (
                 <>
                   <span className="text-xs text-faint">and</span>
-                  <Input mono className="h-7 min-w-0 flex-1" value={f.value2 ?? ""} onChange={(e) => update(f.id, { value2: e.target.value })} />
+                  <Input
+                    mono
+                    className="h-7 min-w-0 flex-1"
+                    value={f.value2 ?? ""}
+                    onChange={(e) => update(f.id, { value2: e.target.value })}
+                  />
                 </>
               )}
               {arity === 0 && <div className="flex-1" />}
@@ -172,7 +186,9 @@ export function FilterBar({
 
         {rawOpen && (
           <div className="flex items-center gap-1.5">
-            <span className="w-12 shrink-0 text-right text-2xs font-semibold tracking-wider text-faint uppercase">{filters.length ? "and" : "where"}</span>
+            <span className="w-12 shrink-0 text-right text-2xs font-semibold tracking-wider text-faint uppercase">
+              {filters.length ? "and" : "where"}
+            </span>
             <Code2 className="size-3.5 shrink-0 text-iris" />
             <Input
               mono
@@ -189,7 +205,12 @@ export function FilterBar({
         )}
 
         <div className="flex items-center gap-2 pl-[54px]">
-          <Button size="sm" variant="subtle" icon={<Plus className="size-3.5" />} onClick={() => onChange([...filters, newFilter(columns[0])])}>
+          <Button
+            size="sm"
+            variant="subtle"
+            icon={<Plus className="size-3.5" />}
+            onClick={() => onChange([...filters, newFilter(columns[0])])}
+          >
             Add filter
           </Button>
           {!rawOpen && (
@@ -212,7 +233,11 @@ export function FilterBar({
             </div>
           )}
           {(filters.length > 0 || rawWhere) && (
-            <button className="ml-auto text-xs text-muted hover:text-fg" onClick={() => (onChange([]), onRawWhere(""), onRawOpen(false))}>
+            <button
+              type="button"
+              className="ml-auto text-xs text-muted hover:text-fg"
+              onClick={() => (onChange([]), onRawWhere(""), onRawOpen(false))}
+            >
               Clear all
             </button>
           )}

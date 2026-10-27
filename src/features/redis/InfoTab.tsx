@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { IconButton, Input, Spinner } from "../../components/ui";
 import { formatInt } from "../../lib/format";
 import { errorMessage, rpc } from "../../lib/rpc";
 import type { RedisInfo } from "../../lib/types";
-import { useApp, type Session } from "../../store/app";
+import { type Session, useApp } from "../../store/app";
 
 function uptime(sec: number) {
   const d = Math.floor(sec / 86400);
@@ -44,11 +44,23 @@ export function InfoTab({ session, active }: { session: Session; active: boolean
   const totalKeys = Object.values(s.keyspace ?? {}).reduce((n, v) => n + Number(/keys=(\d+)/.exec(v)?.[1] ?? 0), 0);
   const cards: [string, string, string?][] = [
     ["Version", get("server", "redis_version") ?? get("server", "valkey_version") ?? "—", get("server", "redis_mode")],
-    ["Uptime", uptime(Number(get("server", "uptime_in_seconds") ?? 0)), `since ${new Date(Date.now() - Number(get("server", "uptime_in_seconds") ?? 0) * 1000).toLocaleDateString()}`],
+    [
+      "Uptime",
+      uptime(Number(get("server", "uptime_in_seconds") ?? 0)),
+      `since ${new Date(Date.now() - Number(get("server", "uptime_in_seconds") ?? 0) * 1000).toLocaleDateString()}`,
+    ],
     ["Memory", get("memory", "used_memory_human") ?? "—", `peak ${get("memory", "used_memory_peak_human") ?? "—"}`],
     ["Clients", formatInt(Number(get("clients", "connected_clients") ?? 0)), `${get("clients", "blocked_clients") ?? 0} blocked`],
-    ["Ops / sec", formatInt(Number(get("stats", "instantaneous_ops_per_sec") ?? 0)), `${formatInt(Number(get("stats", "total_commands_processed") ?? 0))} total`],
-    ["Hit rate", hits + misses ? `${((hits / (hits + misses)) * 100).toFixed(1)}%` : "—", `${formatInt(hits)} hits · ${formatInt(misses)} misses`],
+    [
+      "Ops / sec",
+      formatInt(Number(get("stats", "instantaneous_ops_per_sec") ?? 0)),
+      `${formatInt(Number(get("stats", "total_commands_processed") ?? 0))} total`,
+    ],
+    [
+      "Hit rate",
+      hits + misses ? `${((hits / (hits + misses)) * 100).toFixed(1)}%` : "—",
+      `${formatInt(hits)} hits · ${formatInt(misses)} misses`,
+    ],
     ["Keys", formatInt(totalKeys), `${Object.keys(s.keyspace ?? {}).length} databases in use`],
   ];
   const q = filter.toLowerCase();

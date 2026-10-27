@@ -19,7 +19,10 @@ pub struct AppError {
 
 impl AppError {
     pub fn msg(message: impl Into<String>) -> Self {
-        AppError { message: message.into(), ..Default::default() }
+        AppError {
+            message: message.into(),
+            ..Default::default()
+        }
     }
 }
 
@@ -62,7 +65,11 @@ impl From<tokio_postgres::Error> for AppError {
 
 impl From<redis::RedisError> for AppError {
     fn from(e: redis::RedisError) -> Self {
-        AppError { message: e.to_string(), code: e.code().map(str::to_string), ..Default::default() }
+        AppError {
+            message: e.to_string(),
+            code: e.code().map(str::to_string),
+            ..Default::default()
+        }
     }
 }
 

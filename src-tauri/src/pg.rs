@@ -4,14 +4,14 @@
 //! viewer needs: lossless for every type, including user enums, arrays and ranges.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use futures_util::{pin_mut, StreamExt};
+use futures_util::{StreamExt, pin_mut};
 use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{CancelToken, Client, SimpleQueryMessage};
@@ -121,7 +121,10 @@ pub async fn test_connection(cfg: &ConnectionConfig) -> AppResult<Value> {
     let conn = connect(cfg, &cfg.database).await?;
     let row = conn
         .client
-        .query_one("SELECT version(), current_user::text, current_database()::text, inet_server_addr()::text", &[])
+        .query_one(
+            "SELECT version(), current_user::text, current_database()::text, inet_server_addr()::text",
+            &[],
+        )
         .await?;
     Ok(json!({
         "version": row.get::<_, String>(0),
@@ -185,7 +188,9 @@ pub async fn list_databases(s: &PgSession) -> AppResult<Value> {
         )
         .await?;
     Ok(Value::Array(
-        rows.iter().map(|r| json!({ "name": r.get::<_, String>(0), "sizeBytes": r.get::<_, i64>(1) })).collect(),
+        rows.iter()
+            .map(|r| json!({ "name": r.get::<_, String>(0), "sizeBytes": r.get::<_, i64>(1) }))
+            .collect(),
     ))
 }
 
@@ -210,7 +215,11 @@ pub async fn list_objects(s: &PgSession) -> AppResult<Value> {
            AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
          ORDER BY n.nspname, p.proname"
     );
-    let (schemas, rels, fns) = tokio::try_join!(c.query(&schemas_sql, &[]), c.query(&rel_sql, &[]), c.query(&fn_sql, &[]))?;
+    let (schemas, rels, fns) = tokio::try_join!(
+        c.query(&schemas_sql, &[]),
+        c.query(&rel_sql, &[]),
+        c.query(&fn_sql, &[])
+    )?;
     let objects: Vec<Value> = rels
         .iter()
         .map(|r| {
@@ -292,7 +301,9 @@ async fn columns_on(c: &Client, schema: &str, table: &str) -> AppResult<Vec<Colu
         )
         .await?;
     if rows.is_empty() {
-        return Err(AppError::msg(format!("Table {schema}.{table} has no columns or does not exist.")));
+        return Err(AppError::msg(format!(
+            "Table {schema}.{table} has no columns or does not exist."
+        )));
     }
     Ok(rows
         .iter()
@@ -367,10 +378,15 @@ pub async fn table_structure(s: &PgSession, schema: &str, table: &str) -> AppRes
          WHERE tgrelid = ($1::text)::regclass AND NOT tgisinternal ORDER BY tgname",
         &rp,
     );
-    let (cols, info, fks, refs, indexes, constraints, triggers) =
-        tokio::try_join!(cols, async { info.await.map_err(AppError::from) }, async { fks.await.map_err(AppError::from) },
-            async { refs.await.map_err(AppError::from) }, async { indexes.await.map_err(AppError::from) },
-            async { constraints.await.map_err(AppError::from) }, async { triggers.await.map_err(AppError::from) })?;
+    let (cols, info, fks, refs, indexes, constraints, triggers) = tokio::try_join!(
+        cols,
+        async { info.await.map_err(AppError::from) },
+        async { fks.await.map_err(AppError::from) },
+        async { refs.await.map_err(AppError::from) },
+        async { indexes.await.map_err(AppError::from) },
+        async { constraints.await.map_err(AppError::from) },
+        async { triggers.await.map_err(AppError::from) }
+    )?;
 
     let est: f64 = info.get(1);
     Ok(json!({
@@ -421,7 +437,10 @@ pub async fn table_structure(s: &PgSession, schema: &str, table: &str) -> AppRes
 }
 
 pub async fn function_definition(s: &PgSession, oid: i64) -> AppResult<Value> {
-    let row = s.c().query_one("SELECT pg_get_functiondef($1::int8::oid)", &[&oid]).await?;
+    let row = s
+        .c()
+        .query_one("SELECT pg_get_functiondef($1::int8::oid)", &[&oid])
+        .await?;
     Ok(json!(row.get::<_, String>(0)))
 }
 
@@ -526,13 +545,22 @@ impl<'a> WhereBuilder<'a> {
             "lte" => format!("{ident} <= {}", typed(self, val)),
             "gt" => format!("{ident} > {}", typed(self, val)),
             "gte" => format!("{ident} >= {}", typed(self, val)),
-            "contains" => format!("{ident}::text ILIKE {} ESCAPE '\\'", self.bind(format!("%{}%", like_escape(&val)))),
+            "contains" => format!(
+                "{ident}::text ILIKE {} ESCAPE '\\'",
+                self.bind(format!("%{}%", like_escape(&val)))
+            ),
             "not_contains" => format!(
                 "({ident} IS NULL OR {ident}::text NOT ILIKE {} ESCAPE '\\')",
                 self.bind(format!("%{}%", like_escape(&val)))
             ),
-            "starts_with" => format!("{ident}::text ILIKE {} ESCAPE '\\'", self.bind(format!("{}%", like_escape(&val)))),
-            "ends_with" => format!("{ident}::text ILIKE {} ESCAPE '\\'", self.bind(format!("%{}", like_escape(&val)))),
+            "starts_with" => format!(
+                "{ident}::text ILIKE {} ESCAPE '\\'",
+                self.bind(format!("{}%", like_escape(&val)))
+            ),
+            "ends_with" => format!(
+                "{ident}::text ILIKE {} ESCAPE '\\'",
+                self.bind(format!("%{}", like_escape(&val)))
+            ),
             "regex" => format!("{ident}::text ~* {}", self.bind(val)),
             "is_null" => format!("{ident} IS NULL"),
             "not_null" => format!("{ident} IS NOT NULL"),
@@ -540,8 +568,11 @@ impl<'a> WhereBuilder<'a> {
             "is_true" => format!("{ident} IS TRUE"),
             "is_false" => format!("{ident} IS FALSE"),
             "in" | "not_in" => {
-                let items: Vec<String> =
-                    val.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                let items: Vec<String> = val
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 let p = self.bind(items);
                 let expr = format!("{ident} = ANY({p}::text[]::{cast}[])");
                 if f.op == "in" { expr } else { format!("NOT ({expr})") }
@@ -564,17 +595,27 @@ pub async fn fetch_rows(s: &PgSession, req: FetchRequest) -> AppResult<Value> {
     let rel = qualified(&req.schema, &req.table);
 
     let kind_row = c
-        .query_one("SELECT c.relkind::text FROM pg_class c WHERE c.oid = ($1::text)::regclass", &[&rel])
+        .query_one(
+            "SELECT c.relkind::text FROM pg_class c WHERE c.oid = ($1::text)::regclass",
+            &[&rel],
+        )
         .await?;
     let relkind: String = kind_row.get(0);
     let has_ctid = matches!(relkind.as_str(), "r" | "p" | "m");
 
-    let mut wb = WhereBuilder { cols: &by_name, params: Vec::new() };
+    let mut wb = WhereBuilder {
+        cols: &by_name,
+        params: Vec::new(),
+    };
     let mut conds: Vec<String> = Vec::new();
     for f in req.filters.iter().filter(|f| f.enabled) {
         conds.push(wb.condition(f)?);
     }
-    let joiner = if req.match_mode.as_deref() == Some("or") { " OR " } else { " AND " };
+    let joiner = if req.match_mode.as_deref() == Some("or") {
+        " OR "
+    } else {
+        " AND "
+    };
     let mut clauses: Vec<String> = Vec::new();
     if !conds.is_empty() {
         clauses.push(format!("({})", conds.join(joiner)));
@@ -586,27 +627,46 @@ pub async fn fetch_rows(s: &PgSession, req: FetchRequest) -> AppResult<Value> {
         let p = wb.bind(format!("%{}%", like_escape(q)));
         clauses.push(format!("(t.*)::text ILIKE {p} ESCAPE '\\'"));
     }
-    let where_sql = if clauses.is_empty() { String::new() } else { format!(" WHERE {}", clauses.join(" AND ")) };
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
 
     let mut order: Vec<String> = Vec::new();
     for srt in &req.sort {
         let col = by_name
             .get(srt.column.as_str())
             .ok_or_else(|| AppError::msg(format!("Unknown column \"{}\" in sort.", srt.column)))?;
-        order.push(format!("t.{} {}", quote_ident(&col.name), if srt.desc { "DESC NULLS LAST" } else { "ASC NULLS FIRST" }));
+        order.push(format!(
+            "t.{} {}",
+            quote_ident(&col.name),
+            if srt.desc { "DESC NULLS LAST" } else { "ASC NULLS FIRST" }
+        ));
     }
     if order.is_empty() {
         // Stable paging: primary key order when available, else physical order.
-        let pk: Vec<String> = cols.iter().filter(|c| c.is_pk).map(|c| format!("t.{}", quote_ident(&c.name))).collect();
+        let pk: Vec<String> = cols
+            .iter()
+            .filter(|c| c.is_pk)
+            .map(|c| format!("t.{}", quote_ident(&c.name)))
+            .collect();
         if !pk.is_empty() {
             order = pk;
         } else if has_ctid {
             order.push("t.ctid".into());
         }
     }
-    let order_sql = if order.is_empty() { String::new() } else { format!(" ORDER BY {}", order.join(", ")) };
+    let order_sql = if order.is_empty() {
+        String::new()
+    } else {
+        format!(" ORDER BY {}", order.join(", "))
+    };
 
-    let select_list: Vec<String> = cols.iter().map(|c| format!("t.{}::text", quote_ident(&c.name))).collect();
+    let select_list: Vec<String> = cols
+        .iter()
+        .map(|c| format!("t.{}::text", quote_ident(&c.name)))
+        .collect();
     let rowid = if has_ctid { "t.ctid::text" } else { "NULL::text" };
     let limit = req.limit.clamp(1, 100_000);
     let offset = req.offset.max(0);
@@ -624,7 +684,10 @@ pub async fn fetch_rows(s: &PgSession, req: FetchRequest) -> AppResult<Value> {
         if !filtered {
             // Large unfiltered tables: the planner estimate is instant and good enough.
             let est: f64 = c
-                .query_one("SELECT reltuples::float8 FROM pg_class WHERE oid = ($1::text)::regclass", &[&rel])
+                .query_one(
+                    "SELECT reltuples::float8 FROM pg_class WHERE oid = ($1::text)::regclass",
+                    &[&rel],
+                )
                 .await?
                 .get(0);
             if est > 500_000.0 {
@@ -664,7 +727,10 @@ pub async fn fetch_rows(s: &PgSession, req: FetchRequest) -> AppResult<Value> {
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Change {
     #[serde(rename = "update")]
-    Update { key: RowKey, values: HashMap<String, Option<String>> },
+    Update {
+        key: RowKey,
+        values: HashMap<String, Option<String>>,
+    },
     #[serde(rename = "insert")]
     Insert { values: HashMap<String, Option<String>> },
     #[serde(rename = "delete")]
@@ -690,6 +756,9 @@ async fn writer_conn<'a>(s: &'a PgSession) -> AppResult<tokio::sync::MutexGuard<
     Ok(guard)
 }
 
+/// Pushes a value onto the parameter list and returns its `$n` placeholder.
+type Bind<'a> = &'a mut dyn FnMut(Option<String>, &mut Vec<Option<String>>) -> String;
+
 pub async fn apply_changes(s: &PgSession, schema: &str, table: &str, changes: Vec<Change>) -> AppResult<Value> {
     let mut guard = writer_conn(s).await?;
     let conn = guard.as_mut().unwrap();
@@ -698,7 +767,10 @@ pub async fn apply_changes(s: &PgSession, schema: &str, table: &str, changes: Ve
     let rel = qualified(schema, table);
 
     let col = |name: &str| -> AppResult<&ColumnInfo> {
-        by_name.get(name).copied().ok_or_else(|| AppError::msg(format!("Unknown column \"{name}\".")))
+        by_name
+            .get(name)
+            .copied()
+            .ok_or_else(|| AppError::msg(format!("Unknown column \"{name}\".")))
     };
 
     let tx = conn.client.transaction().await?;
@@ -709,7 +781,7 @@ pub async fn apply_changes(s: &PgSession, schema: &str, table: &str, changes: Ve
             params.push(v);
             format!("${}", params.len())
         };
-        let key_sql = |key: &RowKey, params: &mut Vec<Option<String>>, bind: &mut dyn FnMut(Option<String>, &mut Vec<Option<String>>) -> String| -> AppResult<String> {
+        let key_sql = |key: &RowKey, params: &mut Vec<Option<String>>, bind: Bind<'_>| -> AppResult<String> {
             if let Some(pk) = key.pk.as_ref().filter(|m| !m.is_empty()) {
                 let mut parts = Vec::new();
                 for (k, v) in pk {
@@ -820,7 +892,11 @@ impl Drop for RunningGuard<'_> {
 }
 
 fn cancelled_error() -> AppError {
-    AppError { message: "canceling statement due to user request".into(), code: Some("57014".into()), ..Default::default() }
+    AppError {
+        message: "canceling statement due to user request".into(),
+        code: Some("57014".into()),
+        ..Default::default()
+    }
 }
 
 pub async fn execute(s: &PgSession, sql: &str, max_rows: usize) -> AppResult<Value> {
@@ -830,7 +906,9 @@ pub async fn execute(s: &PgSession, sql: &str, max_rows: usize) -> AppResult<Val
     let _running = RunningGuard(&s.editor_running);
     let guard = editor_conn(s).await?;
     if s.cancel_requested.load(Ordering::SeqCst) {
-        return Ok(json!({ "results": [], "error": cancelled_error(), "durationMs": started.elapsed().as_secs_f64() * 1000.0 }));
+        return Ok(
+            json!({ "results": [], "error": cancelled_error(), "durationMs": started.elapsed().as_secs_f64() * 1000.0 }),
+        );
     }
     let client = &guard.as_ref().unwrap().client;
     let max_rows = max_rows.clamp(1, 1_000_000);
@@ -867,17 +945,18 @@ pub async fn execute(s: &PgSession, sql: &str, max_rows: usize) -> AppResult<Val
                     Ok(SimpleQueryMessage::Row(row)) => {
                         if let Some(rs) = current.as_mut() {
                             if rs.rows.len() < max_rows {
-                                rs.rows.push((0..row.len()).map(|i| row.get(i).map(str::to_string)).collect());
+                                rs.rows
+                                    .push((0..row.len()).map(|i| row.get(i).map(str::to_string)).collect());
                             } else if !rs.truncated {
                                 rs.truncated = true;
                                 // Stop the server from streaming rows we will discard.
-                                if let Some(tok) = s.editor_cancel.lock().unwrap().clone() {
-                                    if let Ok(tls) = tls_connector(&s.cfg) {
-                                        cancelled_for_cap = true;
-                                        tokio::spawn(async move {
-                                            let _ = tok.cancel_query(tls).await;
-                                        });
-                                    }
+                                if let Some(tok) = s.editor_cancel.lock().unwrap().clone()
+                                    && let Ok(tls) = tls_connector(&s.cfg)
+                                {
+                                    cancelled_for_cap = true;
+                                    tokio::spawn(async move {
+                                        let _ = tok.cancel_query(tls).await;
+                                    });
                                 }
                             }
                         }
@@ -915,10 +994,11 @@ pub async fn execute(s: &PgSession, sql: &str, max_rows: usize) -> AppResult<Val
     if let Some(rs) = current.take() {
         results.push(rs);
     }
-    if let Some(types) = types {
-        if results.len() == 1 && results[0].columns.len() == types.len() {
-            results[0].column_types = types;
-        }
+    if let Some(types) = types
+        && results.len() == 1
+        && results[0].columns.len() == types.len()
+    {
+        results[0].column_types = types;
     }
     Ok(json!({
         "results": results,
@@ -987,7 +1067,11 @@ pub async fn activity(s: &PgSession) -> AppResult<Value> {
 }
 
 pub async fn signal_backend(s: &PgSession, pid: i32, terminate: bool) -> AppResult<Value> {
-    let f = if terminate { "pg_terminate_backend" } else { "pg_cancel_backend" };
+    let f = if terminate {
+        "pg_terminate_backend"
+    } else {
+        "pg_cancel_backend"
+    };
     let ok: bool = s.c().query_one(&format!("SELECT {f}($1)"), &[&pid]).await?.get(0);
     Ok(json!(ok))
 }
@@ -995,7 +1079,10 @@ pub async fn signal_backend(s: &PgSession, pid: i32, terminate: bool) -> AppResu
 /// Streams a table (or filtered view of it) to a CSV file with COPY.
 pub async fn export_csv(s: &PgSession, schema: &str, table: &str, path: &str) -> AppResult<Value> {
     use tokio::io::AsyncWriteExt;
-    let sql = format!("COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT csv, HEADER true)", qualified(schema, table));
+    let sql = format!(
+        "COPY (SELECT * FROM {}) TO STDOUT WITH (FORMAT csv, HEADER true)",
+        qualified(schema, table)
+    );
     let stream = s.c().copy_out(sql.as_str()).await?;
     pin_mut!(stream);
     let mut file = tokio::fs::File::create(path).await?;

@@ -1,10 +1,10 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, ArrowUpRight, KeyRound, Link2 } from "lucide-react";
+import { memo, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { copyText, toTsv } from "../../lib/export";
 import { familyColor, familyGlyph, type TypeFamily } from "../../lib/format";
 import type { Cell, SortSpec } from "../../lib/types";
-import { copyText, toTsv } from "../../lib/export";
-import { Popover, cx } from "../ui";
+import { cx, Popover } from "../ui";
 
 export interface GridColumn {
   name: string;
@@ -175,7 +175,10 @@ export function DataGrid({
 
   useEffect(() => {
     if (!reveal || reveal.row >= rows.length) return;
-    const c = Math.max(0, columns.findIndex((col) => !col.readOnly && !col.isPk));
+    const c = Math.max(
+      0,
+      columns.findIndex((col) => !col.readOnly && !col.isPk),
+    );
     setSel({ anchor: { r: reveal.row, c }, focus: { r: reveal.row, c }, rowMode: false });
     rowV.scrollToIndex(reveal.row, { align: "center" });
     colV.scrollToIndex(c, { align: "auto" });
@@ -191,10 +194,12 @@ export function DataGrid({
   const inSel = useCallback(
     (r: number, c: number) => {
       if (!sel) return false;
-      const r0 = Math.min(sel.anchor.r, sel.focus.r), r1 = Math.max(sel.anchor.r, sel.focus.r);
+      const r0 = Math.min(sel.anchor.r, sel.focus.r),
+        r1 = Math.max(sel.anchor.r, sel.focus.r);
       if (r < r0 || r > r1) return false;
       if (sel.rowMode) return true;
-      const c0 = Math.min(sel.anchor.c, sel.focus.c), c1 = Math.max(sel.anchor.c, sel.focus.c);
+      const c0 = Math.min(sel.anchor.c, sel.focus.c),
+        c1 = Math.max(sel.anchor.c, sel.focus.c);
       return c >= c0 && c <= c1;
     },
     [sel],
@@ -205,8 +210,7 @@ export function DataGrid({
     colV.scrollToIndex(c, { align: "auto" });
   };
 
-  const canEdit = (c: number, r: number) =>
-    !!editable && !!onEdit && !columns[c]?.readOnly && rowStates?.[r] !== "deleted";
+  const canEdit = (c: number, r: number) => !!editable && !!onEdit && !columns[c]?.readOnly && rowStates?.[r] !== "deleted";
 
   const startEdit = (r: number, c: number, initial?: string) => {
     if (!canEdit(c, r)) return;
@@ -216,12 +220,15 @@ export function DataGrid({
 
   const copySelection = (withHeaders: boolean) => {
     if (!sel) return;
-    const r0 = Math.min(sel.anchor.r, sel.focus.r), r1 = Math.max(sel.anchor.r, sel.focus.r);
+    const r0 = Math.min(sel.anchor.r, sel.focus.r),
+      r1 = Math.max(sel.anchor.r, sel.focus.r);
     const c0 = sel.rowMode ? 0 : Math.min(sel.anchor.c, sel.focus.c);
     const c1 = sel.rowMode ? columns.length - 1 : Math.max(sel.anchor.c, sel.focus.c);
     const slice = rows.slice(r0, r1 + 1).map((row) => row.slice(c0, c1 + 1));
     const single = r0 === r1 && c0 === c1;
-    void copyText(single && !withHeaders ? (slice[0][0] ?? "") : toTsv(withHeaders ? columns.slice(c0, c1 + 1).map((c) => c.name) : null, slice));
+    void copyText(
+      single && !withHeaders ? (slice[0][0] ?? "") : toTsv(withHeaders ? columns.slice(c0, c1 + 1).map((c) => c.name) : null, slice),
+    );
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -255,15 +262,24 @@ export function DataGrid({
     };
     const page = Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 400) / ROW_H) - 2);
     switch (e.key) {
-      case "ArrowDown": return move(mod ? rows.length : 1, 0);
-      case "ArrowUp": return move(mod ? -rows.length : -1, 0);
-      case "ArrowRight": return move(0, mod ? columns.length : 1);
-      case "ArrowLeft": return move(0, mod ? -columns.length : -1);
-      case "PageDown": return move(page, 0);
-      case "PageUp": return move(-page, 0);
-      case "Home": return move(0, -columns.length);
-      case "End": return move(0, columns.length);
-      case "Tab": return move(0, e.shiftKey ? -1 : 1);
+      case "ArrowDown":
+        return move(mod ? rows.length : 1, 0);
+      case "ArrowUp":
+        return move(mod ? -rows.length : -1, 0);
+      case "ArrowRight":
+        return move(0, mod ? columns.length : 1);
+      case "ArrowLeft":
+        return move(0, mod ? -columns.length : -1);
+      case "PageDown":
+        return move(page, 0);
+      case "PageUp":
+        return move(-page, 0);
+      case "Home":
+        return move(0, -columns.length);
+      case "End":
+        return move(0, columns.length);
+      case "Tab":
+        return move(0, e.shiftKey ? -1 : 1);
       case "Enter":
       case "F2":
         e.preventDefault();
@@ -448,7 +464,7 @@ export function DataGrid({
                         className={cx(
                           "group/cell absolute top-0 flex h-full items-center overflow-hidden border-r border-line/40 px-2 whitespace-nowrap",
                           col.family === "num" && "justify-end tabular",
-                                                    edited && "!bg-warn/15",
+                          edited && "!bg-warn/15",
                           isFocus && "z-[1] shadow-[inset_0_0_0_1.5px_var(--iris)]",
                         )}
                         style={{ left: vc.start, width: vc.size, background: selected && !edited ? "var(--selection)" : undefined }}
@@ -465,6 +481,7 @@ export function DataGrid({
                         </span>
                         {col.fk && v != null && onOpenFk && (
                           <button
+                            type="button"
                             className="ml-1 hidden shrink-0 rounded p-0.5 text-info hover:bg-info/15 group-hover/cell:inline-flex"
                             title={`Open ${col.fk.table} where ${col.fk.column} = ${v}`}
                             onMouseDown={(e) => e.stopPropagation()}
@@ -511,9 +528,7 @@ export function DataGrid({
         )}
       </div>
 
-      {rows.length === 0 && emptyState && (
-        <div className="pointer-events-none absolute inset-x-0 top-[34px] bottom-0">{emptyState}</div>
-      )}
+      {rows.length === 0 && emptyState && <div className="pointer-events-none absolute inset-x-0 top-[34px] bottom-0">{emptyState}</div>}
 
       <div ref={menuAnchor} className="fixed size-0" style={{ left: menu?.x ?? 0, top: menu?.y ?? 0 }} />
       <Popover anchor={menuAnchor.current} open={!!menu && menuActions.length > 0} onClose={() => setMenu(null)} className="w-60">
@@ -521,6 +536,7 @@ export function DataGrid({
           <div key={i}>
             {a.separatorBefore && <div className="my-1 h-px bg-line" />}
             <button
+              type="button"
               className={cx(
                 "flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-sm",
                 a.danger ? "text-danger hover:bg-danger/10" : "hover:bg-iris-soft",
@@ -582,16 +598,20 @@ function CellEditor({
     onChange: (e: React.ChangeEvent<HTMLInputElement & HTMLTextAreaElement>) => setValue(e.target.value),
     onKeyDown,
     onBlur: () => onCommit(value),
-    className:
-      "w-full resize-none bg-raised px-2 font-mono text-[12px] text-fg outline-none",
+    className: "w-full resize-none bg-raised px-2 font-mono text-[12px] text-fg outline-none",
   };
   return (
     <div className="absolute z-30 rounded-md shadow-[0_0_0_2px_var(--iris),var(--shadow-pop)]" style={style}>
-      {multiline ? <textarea {...common} rows={6} className={common.className + " py-1.5"} /> : <input {...common} className={common.className + " h-[28px]"} />}
+      {multiline ? (
+        <textarea {...common} rows={6} className={common.className + " py-1.5"} />
+      ) : (
+        <input {...common} className={common.className + " h-[28px]"} />
+      )}
       <div className="flex items-center justify-between bg-panel px-2 py-1 font-sans text-[10px] text-faint">
         <span>{multiline ? "⇧↵ new line · ↵ save" : "↵ save · ⇥ next"} · esc cancel</span>
         {column.nullable && (
           <button
+            type="button"
             className="rounded px-1 font-semibold text-iris hover:bg-iris-soft"
             onMouseDown={(e) => {
               e.preventDefault();

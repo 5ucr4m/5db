@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -19,18 +18,42 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { DEFAULT_CELL, DataGrid, selectedRowIndexes, type GridColumn, type GridContextAction, type RowState, type Selection } from "../../components/grid/DataGrid";
-import { Button, IconButton, Input, MenuItem, MenuLabel, MenuSeparator, Modal, Popover, Resizer, Segmented, Select, Spinner, cx, useResizable } from "../../components/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DataGrid,
+  DEFAULT_CELL,
+  type GridColumn,
+  type GridContextAction,
+  type RowState,
+  type Selection,
+  selectedRowIndexes,
+} from "../../components/grid/DataGrid";
+import {
+  Button,
+  cx,
+  IconButton,
+  Input,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  Modal,
+  Popover,
+  Resizer,
+  Segmented,
+  Select,
+  Spinner,
+  useResizable,
+} from "../../components/ui";
 import { copyText, pickSavePath, saveText, toCsv, toJson } from "../../lib/export";
 import { formatDuration, formatInt, typeFamily, uid } from "../../lib/format";
 import { errorMessage, isTauri, rpc } from "../../lib/rpc";
 import { generateDdl, insertStatements, literal, qualified, quoteIdent } from "../../lib/sql";
 import type { Cell, Filter, RowsPage, SortSpec, TableStructure } from "../../lib/types";
-import { useApp, useConnection, type Session, type Tab } from "../../store/app";
+import { type Session, type Tab, useApp, useConnection } from "../../store/app";
 import { FilterBar, newFilter, opArity } from "./FilterBar";
+import { SqlEditor } from "./LazySqlEditor";
 import { ExportMenu } from "./ResultsPanel";
 import { RowInspector } from "./RowInspector";
-import { SqlEditor } from "./LazySqlEditor";
 import { StructureView } from "./StructureView";
 
 type TableTabT = Extract<Tab, { kind: "table" }>;
@@ -112,7 +135,12 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
     [filters],
   );
   const query = useDebounced(
-    JSON.stringify({ f: effectiveFilters.map(({ column, op, value, value2 }) => ({ column, op, value, value2: opArity(op) === 2 ? value2 : undefined })), m: matchMode, w: rawWhere.trim(), s: search.trim() }),
+    JSON.stringify({
+      f: effectiveFilters.map(({ column, op, value, value2 }) => ({ column, op, value, value2: opArity(op) === 2 ? value2 : undefined })),
+      m: matchMode,
+      w: rawWhere.trim(),
+      s: search.trim(),
+    }),
     280,
   );
   useEffect(() => {
@@ -121,7 +149,14 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
 
   const loadStructure = useCallback(async () => {
     try {
-      setStructure(await rpc<TableStructure>("pg.structure", { connectionId: session.connectionId, database: session.database, schema: tab.schema, table: tab.name }));
+      setStructure(
+        await rpc<TableStructure>("pg.structure", {
+          connectionId: session.connectionId,
+          database: session.database,
+          schema: tab.schema,
+          table: tab.name,
+        }),
+      );
     } catch (e) {
       toast("error", errorMessage(e));
     }
@@ -164,7 +199,10 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
   const columns = data?.columns ?? structure?.columns ?? [];
   const fkMap = useMemo(() => {
     const m = new Map<string, { schema: string; table: string; column: string }>();
-    for (const fk of structure?.foreignKeys ?? []) fk.columns.forEach((c, i) => m.set(c, { schema: fk.refSchema, table: fk.refTable, column: fk.refColumns[i] }));
+    for (const fk of structure?.foreignKeys ?? [])
+      fk.columns.forEach((c, i) => {
+        m.set(c, { schema: fk.refSchema, table: fk.refTable, column: fk.refColumns[i] });
+      });
     return m;
   }, [structure]);
   const gridColumns: GridColumn[] = useMemo(
@@ -312,11 +350,19 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
   const previewSql = () => {
     const rel = qualified(tab.schema, tab.name);
     const where = (k: RowKey) =>
-      k.pk ? Object.entries(k.pk).map(([c, v]) => (v == null ? `${quoteIdent(c)} IS NULL` : `${quoteIdent(c)} = ${literal(v)}`)).join(" AND ") : `ctid = '${k.ctid}'`;
+      k.pk
+        ? Object.entries(k.pk)
+            .map(([c, v]) => (v == null ? `${quoteIdent(c)} IS NULL` : `${quoteIdent(c)} = ${literal(v)}`))
+            .join(" AND ")
+        : `ctid = '${k.ctid}'`;
     const lines = ["BEGIN;"];
     for (const k of staged.deletes.values()) lines.push(`DELETE FROM ${rel} WHERE ${where(k)};`);
     for (const u of staged.updates.values())
-      lines.push(`UPDATE ${rel} SET ${Object.entries(u.values).map(([c, v]) => `${quoteIdent(c)} = ${literal(v)}`).join(", ")} WHERE ${where(u.key)};`);
+      lines.push(
+        `UPDATE ${rel} SET ${Object.entries(u.values)
+          .map(([c, v]) => `${quoteIdent(c)} = ${literal(v)}`)
+          .join(", ")} WHERE ${where(u.key)};`,
+      );
     for (const ins of staged.inserts) {
       const entries = Object.entries(ins.values).filter(([, v]) => v !== undefined) as [string, Cell][];
       lines.push(
@@ -342,7 +388,13 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
     }
     setSaving(true);
     try {
-      await rpc("pg.apply", { connectionId: session.connectionId, database: session.database, schema: tab.schema, table: tab.name, changes: changes() });
+      await rpc("pg.apply", {
+        connectionId: session.connectionId,
+        database: session.database,
+        schema: tab.schema,
+        table: tab.name,
+        changes: changes(),
+      });
       toast("ok", `Saved ${pending} change${pending === 1 ? "" : "s"} to ${tab.name}`);
       setStaged(emptyStaged());
       setReloadToken((t) => t + 1);
@@ -356,7 +408,12 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
 
   const reload = async () => {
     if (pending) {
-      const ok = await confirm({ title: "Discard unsaved changes?", body: `Reloading drops ${pending} staged change${pending === 1 ? "" : "s"}.`, confirmLabel: "Discard and reload", danger: true });
+      const ok = await confirm({
+        title: "Discard unsaved changes?",
+        body: `Reloading drops ${pending} staged change${pending === 1 ? "" : "s"}.`,
+        confirmLabel: "Discard and reload",
+        danger: true,
+      });
       if (!ok) return;
       discard();
     }
@@ -414,21 +471,52 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
     const names = columns.map((x) => x.name);
     const actions: GridContextAction[] = [
       { label: "Copy value", icon: <Clipboard className="size-3.5" />, kbd: "⌘C", run: () => void copyText(realValue ?? "") },
-      { label: "Copy row as JSON", icon: <Copy className="size-3.5" />, run: () => void copyText(toJson(names, rows.map((i) => displayRows[i]))) },
-      { label: "Copy row as INSERT", icon: <Copy className="size-3.5" />, run: () => void copyText(insertStatements(qualified(tab.schema, tab.name), names, rows.map((i) => displayRows[i]))) },
       {
-        label: realValue == null ? `Filter: ${col.name} is NULL` : `Filter: ${col.name} = ${realValue.length > 24 ? realValue.slice(0, 24) + "…" : realValue}`,
+        label: "Copy row as JSON",
+        icon: <Copy className="size-3.5" />,
+        run: () =>
+          void copyText(
+            toJson(
+              names,
+              rows.map((i) => displayRows[i]),
+            ),
+          ),
+      },
+      {
+        label: "Copy row as INSERT",
+        icon: <Copy className="size-3.5" />,
+        run: () =>
+          void copyText(
+            insertStatements(
+              qualified(tab.schema, tab.name),
+              names,
+              rows.map((i) => displayRows[i]),
+            ),
+          ),
+      },
+      {
+        label:
+          realValue == null
+            ? `Filter: ${col.name} is NULL`
+            : `Filter: ${col.name} = ${realValue.length > 24 ? realValue.slice(0, 24) + "…" : realValue}`,
         icon: <FilterIcon className="size-3.5" />,
         separatorBefore: true,
         run: () => addQuickFilter(col.name, realValue),
       },
       { label: `Exclude this value`, icon: <FilterX className="size-3.5" />, run: () => addQuickFilter(col.name, realValue, true) },
     ];
-    if (col.fk && realValue != null) actions.push({ label: `Open ${col.fk.table} row`, icon: <ChevronRight className="size-3.5" />, run: () => openFk(col, realValue) });
+    if (col.fk && realValue != null)
+      actions.push({ label: `Open ${col.fk.table} row`, icon: <ChevronRight className="size-3.5" />, run: () => openFk(col, realValue) });
     if (editable) {
       if (col.nullable && !col.readOnly && !isDeleted)
         actions.push({ label: "Set NULL", separatorBefore: true, run: () => onEdit(r, c, null) });
-      actions.push({ label: "Show row details", icon: <PanelRight className="size-3.5" />, kbd: "⌘I", separatorBefore: !col.nullable, run: () => setInspectorOpen(true) });
+      actions.push({
+        label: "Show row details",
+        icon: <PanelRight className="size-3.5" />,
+        kbd: "⌘I",
+        separatorBefore: !col.nullable,
+        run: () => setInspectorOpen(true),
+      });
       if (isDeleted) actions.push({ label: "Restore row", icon: <RotateCcw className="size-3.5" />, run: () => restoreRows(rows) });
       else
         actions.push({
@@ -487,11 +575,31 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
       if (isTauri) {
         const path = await pickSavePath(name, "csv");
         if (!path || path === "download") return;
-        const r = await rpc<{ bytes: number }>("pg.exportCsv", { connectionId: session.connectionId, database: session.database, schema: tab.schema, table: tab.name, path });
+        const r = await rpc<{ bytes: number }>("pg.exportCsv", {
+          connectionId: session.connectionId,
+          database: session.database,
+          schema: tab.schema,
+          table: tab.name,
+          path,
+        });
         toast("ok", `Exported ${tab.name} (${formatInt(r.bytes)} bytes)`);
       } else {
-        const all = await rpc<RowsPage>("pg.rows", { connectionId: session.connectionId, database: session.database, schema: tab.schema, table: tab.name, limit: 100000, count: false });
-        await saveText(name, "csv", toCsv(all.columns.map((c) => c.name), all.rows));
+        const all = await rpc<RowsPage>("pg.rows", {
+          connectionId: session.connectionId,
+          database: session.database,
+          schema: tab.schema,
+          table: tab.name,
+          limit: 100000,
+          count: false,
+        });
+        await saveText(
+          name,
+          "csv",
+          toCsv(
+            all.columns.map((c) => c.name),
+            all.rows,
+          ),
+        );
         toast("ok", `Exported ${formatInt(all.rows.length)} rows`);
       }
     } catch (e) {
@@ -501,8 +609,16 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
 
   const tableAction = async (kind: "truncate" | "drop" | "refresh") => {
     const rel = qualified(tab.schema, tab.name);
-    const objectWord = tab.objectKind === "view" ? "VIEW" : tab.objectKind === "matview" ? "MATERIALIZED VIEW" : tab.objectKind === "foreign" ? "FOREIGN TABLE" : "TABLE";
-    const sql = kind === "truncate" ? `TRUNCATE ${rel}` : kind === "drop" ? `DROP ${objectWord} ${rel}` : `REFRESH MATERIALIZED VIEW ${rel}`;
+    const objectWord =
+      tab.objectKind === "view"
+        ? "VIEW"
+        : tab.objectKind === "matview"
+          ? "MATERIALIZED VIEW"
+          : tab.objectKind === "foreign"
+            ? "FOREIGN TABLE"
+            : "TABLE";
+    const sql =
+      kind === "truncate" ? `TRUNCATE ${rel}` : kind === "drop" ? `DROP ${objectWord} ${rel}` : `REFRESH MATERIALIZED VIEW ${rel}`;
     if (kind !== "refresh") {
       const ok = await confirm({
         title: kind === "truncate" ? `Empty ${tab.name}?` : `Drop ${tab.name}?`,
@@ -512,7 +628,11 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
       });
       if (!ok) return;
     }
-    const r = await rpc<{ error: { message: string } | null }>("pg.execute", { connectionId: session.connectionId, database: session.database, sql });
+    const r = await rpc<{ error: { message: string } | null }>("pg.execute", {
+      connectionId: session.connectionId,
+      database: session.database,
+      sql,
+    });
     if (r.error) toast("error", r.error.message);
     else {
       toast("ok", kind === "truncate" ? `Truncated ${tab.name}` : kind === "drop" ? `Dropped ${tab.name}` : `Refreshed ${tab.name}`);
@@ -546,9 +666,20 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
           <>
             <div className="relative w-56">
               <Search className="pointer-events-none absolute top-1.5 left-2 size-3.5 text-faint" />
-              <Input ref={searchRef} className="h-7 pr-6 pl-7 text-xs" placeholder="Search every column  ⌘F" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <Input
+                ref={searchRef}
+                className="h-7 pr-6 pl-7 text-xs"
+                placeholder="Search every column  ⌘F"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
               {search && (
-                <button className="absolute top-1.5 right-1.5 text-faint hover:text-fg" onClick={() => setSearch("")} aria-label="Clear search">
+                <button
+                  type="button"
+                  className="absolute top-1.5 right-1.5 text-faint hover:text-fg"
+                  onClick={() => setSearch("")}
+                  aria-label="Clear search"
+                >
                   <X className="size-3.5" />
                 </button>
               )}
@@ -570,6 +701,7 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
             </Button>
             {sort.map((s) => (
               <button
+                type="button"
                 key={s.column}
                 className="flex h-6 items-center gap-1 rounded-md border border-iris-line bg-iris-soft px-1.5 font-mono text-[11px] text-iris"
                 onClick={() => toggleSort(s.column, true)}
@@ -601,7 +733,14 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
               )}
             </>
           )}
-          {view === "data" && data && <ExportMenu columns={columns.map((c) => c.name)} rows={displayRows.filter((_, i) => rowStates[i] !== "inserted")} baseName={tab.name} tableName={qualified(tab.schema, tab.name)} />}
+          {view === "data" && data && (
+            <ExportMenu
+              columns={columns.map((c) => c.name)}
+              rows={displayRows.filter((_, i) => rowStates[i] !== "inserted")}
+              baseName={tab.name}
+              tableName={qualified(tab.schema, tab.name)}
+            />
+          )}
           <IconButton label="Reload (⌘R)" onClick={reload}>
             <RefreshCw className={cx("size-3.5", loading && "animate-spin")} />
           </IconButton>
@@ -620,7 +759,11 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
             <MenuItem
               onClick={() => {
                 setMoreOpen(false);
-                openTab(session.id, { kind: "query", title: `Query · ${tab.name}`, sql: `SELECT *\nFROM ${qualified(tab.schema, tab.name)}\nLIMIT 100;` });
+                openTab(session.id, {
+                  kind: "query",
+                  title: `Query · ${tab.name}`,
+                  sql: `SELECT *\nFROM ${qualified(tab.schema, tab.name)}\nLIMIT 100;`,
+                });
               }}
             >
               New query on this table
@@ -628,8 +771,12 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
             <MenuItem icon={<Download className="size-3.5" />} onClick={() => (setMoreOpen(false), void exportTable())}>
               Export entire table as CSV
             </MenuItem>
-            <MenuItem onClick={() => (setMoreOpen(false), void copyText(qualified(tab.schema, tab.name)), toast("ok", "Copied name"))}>Copy qualified name</MenuItem>
-            {tab.objectKind === "matview" && <MenuItem onClick={() => (setMoreOpen(false), void tableAction("refresh"))}>Refresh materialized view</MenuItem>}
+            <MenuItem onClick={() => (setMoreOpen(false), void copyText(qualified(tab.schema, tab.name)), toast("ok", "Copied name"))}>
+              Copy qualified name
+            </MenuItem>
+            {tab.objectKind === "matview" && (
+              <MenuItem onClick={() => (setMoreOpen(false), void tableAction("refresh"))}>Refresh materialized view</MenuItem>
+            )}
             {!conn?.readOnly && (
               <>
                 <MenuSeparator />
@@ -698,7 +845,11 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
                     {filterCount || search ? (
                       <>
                         <span>No rows match these filters.</span>
-                        <button className="pointer-events-auto text-iris hover:underline" onClick={() => (setFilters([]), setRawWhere(""), setSearch(""))}>
+                        <button
+                          type="button"
+                          className="pointer-events-auto text-iris hover:underline"
+                          onClick={() => (setFilters([]), setRawWhere(""), setSearch(""))}
+                        >
                           Clear filters
                         </button>
                       </>
@@ -709,16 +860,23 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
                 }
               />
             ))}
-          {view === "data" && loading && data && <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 animate-pulse bg-iris" />}
+          {view === "data" && loading && data && (
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 animate-pulse bg-iris" />
+          )}
           {view === "structure" &&
             (structure ? (
-              <StructureView s={structure} onOpenTable={(schema, name) => openTab(session.id, { kind: "table", title: name, schema, name, objectKind: "table" })} />
+              <StructureView
+                s={structure}
+                onOpenTable={(schema, name) => openTab(session.id, { kind: "table", title: name, schema, name, objectKind: "table" })}
+              />
             ) : (
               <div className="flex h-full items-center justify-center">
                 <Spinner />
               </div>
             ))}
-          {view === "ddl" && structure && <DdlView ddl={generateDdl(structure)} sessionId={session.id} name={tab.name} completion={session.completion} />}
+          {view === "ddl" && structure && (
+            <DdlView ddl={generateDdl(structure)} sessionId={session.id} name={tab.name} completion={session.completion} />
+          )}
         </div>
         {view === "data" && inspectorOpen && (
           <>
@@ -733,7 +891,9 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
               <RowInspector
                 columns={gridColumns}
                 row={focusRow != null ? (displayRows[focusRow] ?? null) : null}
-                rowLabel={focusRow != null ? (rowStates[focusRow] === "inserted" ? "New row" : `Row ${page * pageSize + focusRow + 1}`) : ""}
+                rowLabel={
+                  focusRow != null ? (rowStates[focusRow] === "inserted" ? "New row" : `Row ${page * pageSize + focusRow + 1}`) : ""
+                }
                 editable={editable && focusRow != null && rowStates[focusRow] !== "deleted"}
                 onEdit={(c, v) => focusRow != null && onEdit(focusRow, c, v)}
                 onOpenFk={openFk}
@@ -786,7 +946,9 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
           </span>
           {data && <span className="text-faint tabular">{formatDuration(data.durationMs)}</span>}
           {!editable && data && (
-            <span className="text-faint">{conn?.readOnly ? "Read-only connection" : !data.editable ? "Read-only view" : "No primary key: edits disabled"}</span>
+            <span className="text-faint">
+              {conn?.readOnly ? "Read-only connection" : !data.editable ? "Read-only view" : "No primary key: edits disabled"}
+            </span>
           )}
           <div className="ml-auto flex items-center gap-1">
             <Select
@@ -826,7 +988,12 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
             >
               <ChevronRight className="size-3.5" />
             </IconButton>
-            <IconButton size="sm" label="Last page" disabled={pageCount == null || page + 1 >= pageCount} onClick={() => pageCount && setPage(pageCount - 1)}>
+            <IconButton
+              size="sm"
+              label="Last page"
+              disabled={pageCount == null || page + 1 >= pageCount}
+              onClick={() => pageCount && setPage(pageCount - 1)}
+            >
               <ChevronsRight className="size-3.5" />
             </IconButton>
           </div>
@@ -854,13 +1021,25 @@ export function TableTab({ session, tab, active }: { session: Session; tab: Tabl
           </>
         }
       >
-        <pre className="selectable max-h-[50vh] overflow-auto rounded-lg bg-sunken p-3 font-mono text-xs whitespace-pre-wrap">{previewOpen ? previewSql() : ""}</pre>
+        <pre className="selectable max-h-[50vh] overflow-auto rounded-lg bg-sunken p-3 font-mono text-xs whitespace-pre-wrap">
+          {previewOpen ? previewSql() : ""}
+        </pre>
       </Modal>
     </div>
   );
 }
 
-function DdlView({ ddl, sessionId, name, completion }: { ddl: string; sessionId: string; name: string; completion: Session["completion"] }) {
+function DdlView({
+  ddl,
+  sessionId,
+  name,
+  completion,
+}: {
+  ddl: string;
+  sessionId: string;
+  name: string;
+  completion: Session["completion"];
+}) {
   const openTab = useApp((s) => s.openTab);
   const toast = useApp((s) => s.toast);
   return (
@@ -868,7 +1047,12 @@ function DdlView({ ddl, sessionId, name, completion }: { ddl: string; sessionId:
       <div className="flex shrink-0 items-center gap-1 border-b border-line px-3 py-1.5">
         <span className="text-xs text-muted">Generated from the catalog. Review before running elsewhere.</span>
         <div className="ml-auto flex gap-1">
-          <Button size="sm" variant="ghost" icon={<Clipboard className="size-3.5" />} onClick={() => (void copyText(ddl), toast("ok", "Copied DDL"))}>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Clipboard className="size-3.5" />}
+            onClick={() => (void copyText(ddl), toast("ok", "Copied DDL"))}
+          >
             Copy
           </Button>
           <Button size="sm" variant="ghost" onClick={() => openTab(sessionId, { kind: "query", title: `DDL · ${name}`, sql: ddl })}>
@@ -882,4 +1066,3 @@ function DdlView({ ddl, sessionId, name, completion }: { ddl: string; sessionId:
     </div>
   );
 }
-

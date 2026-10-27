@@ -1,5 +1,5 @@
-import { forwardRef, lazy, Suspense, type ComponentProps } from "react";
-import type { SqlEditor as SqlEditorT, SqlEditorHandle } from "./SqlEditor";
+import { type ComponentProps, forwardRef, lazy, Suspense } from "react";
+import type { SqlEditorHandle, SqlEditor as SqlEditorT } from "./SqlEditor";
 
 // CodeMirror is the largest dependency; load it the first time an editor shows.
 const Impl = lazy(() => import("./SqlEditor").then((m) => ({ default: m.SqlEditor })));

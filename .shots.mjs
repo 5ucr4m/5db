@@ -1,13 +1,64 @@
 import { chromium } from "@playwright/test";
+
 const OUT = process.env.OUT;
-const call = (method, params) => fetch("http://127.0.0.1:1430/rpc", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method, params }) }).then(r => r.json()).then(r => r.data);
+const call = (method, params) =>
+  fetch("http://127.0.0.1:1430/rpc", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ method, params }),
+  })
+    .then((r) => r.json())
+    .then((r) => r.data);
 for (const c of await call("connections.list", {})) await call("connections.delete", { id: c.id });
-const pg = await call("connections.save", { name: "Shop local", kind: "postgres", env: "local", color: "#8b6cff", host: "127.0.0.1", port: 54329, user: "fivedb", password: "fivedb", database: "shop", sslMode: "disable" });
-await call("connections.save", { name: "Shop production", kind: "postgres", env: "prod", color: "#ff7a59", host: "db.internal", port: 5432, user: "app", password: "x", database: "shop", readOnly: true });
-await call("connections.save", { name: "Analytics staging", kind: "postgres", env: "staging", color: "#2ec4b6", host: "analytics.stg", port: 5432, user: "analyst", password: "x", database: "events" });
-const rd = await call("connections.save", { name: "Session cache", kind: "redis", env: "dev", color: "#4cb4ff", host: "127.0.0.1", port: 63799, password: "fivedb" });
+const pg = await call("connections.save", {
+  name: "Shop local",
+  kind: "postgres",
+  env: "local",
+  color: "#8b6cff",
+  host: "127.0.0.1",
+  port: 54329,
+  user: "fivedb",
+  password: "fivedb",
+  database: "shop",
+  sslMode: "disable",
+});
+await call("connections.save", {
+  name: "Shop production",
+  kind: "postgres",
+  env: "prod",
+  color: "#ff7a59",
+  host: "db.internal",
+  port: 5432,
+  user: "app",
+  password: "x",
+  database: "shop",
+  readOnly: true,
+});
+await call("connections.save", {
+  name: "Analytics staging",
+  kind: "postgres",
+  env: "staging",
+  color: "#2ec4b6",
+  host: "analytics.stg",
+  port: 5432,
+  user: "analyst",
+  password: "x",
+  database: "events",
+});
+await call("connections.save", {
+  name: "Session cache",
+  kind: "redis",
+  env: "dev",
+  color: "#4cb4ff",
+  host: "127.0.0.1",
+  port: 63799,
+  password: "fivedb",
+});
 await call("pg.execute", { connectionId: pg.id, sql: "SELECT count(*) FROM orders WHERE status = 'paid'" });
-await call("pg.execute", { connectionId: pg.id, sql: "SELECT c.name, sum(o.total) FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY 1 ORDER BY 2 DESC LIMIT 20" });
+await call("pg.execute", {
+  connectionId: pg.id,
+  sql: "SELECT c.name, sum(o.total) FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY 1 ORDER BY 2 DESC LIMIT 20",
+});
 const b = await chromium.launch();
 for (const theme of ["dark", "light"]) {
   const p = await b.newPage({ viewport: { width: 1440, height: 900 }, colorScheme: theme, deviceScaleFactor: 1 });
@@ -32,7 +83,9 @@ for (const theme of ["dark", "light"]) {
   await p.screenshot({ path: `${OUT}/3-structure-${theme}.png` });
   await p.keyboard.press("Meta+t");
   await p.locator(".cm-content:visible").click();
-  await p.keyboard.type("SELECT c.name, c.country, count(o.*) AS orders, sum(o.total) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.status = 'delivered'\nGROUP BY 1, 2\nORDER BY revenue DESC\nLIMIT 50;");
+  await p.keyboard.type(
+    "SELECT c.name, c.country, count(o.*) AS orders, sum(o.total) AS revenue\nFROM customers c\nJOIN orders o ON o.customer_id = c.id\nWHERE o.status = 'delivered'\nGROUP BY 1, 2\nORDER BY revenue DESC\nLIMIT 50;",
+  );
   await p.keyboard.press("Meta+Enter");
   await p.waitForTimeout(900);
   await p.screenshot({ path: `${OUT}/4-query-${theme}.png` });
