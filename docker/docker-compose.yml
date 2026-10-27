@@ -1,0 +1,29 @@
+name: 5db-test
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: fivedb
+      POSTGRES_PASSWORD: fivedb
+      POSTGRES_DB: shop
+    ports:
+      - "54329:5432"
+    volumes:
+      - ./seed:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fivedb -d shop"]
+      interval: 2s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "fivedb"]
+    ports:
+      - "63799:6379"
+
+  # SSH bastion: reaches postgres:5432 and redis:6379 on the compose network.
+  ssh:
+    build: ./ssh
+    ports:
+      - "22229:22"
