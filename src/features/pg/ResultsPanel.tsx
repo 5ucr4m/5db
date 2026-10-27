@@ -7,6 +7,7 @@ import { formatDuration, formatInt, typeFamily } from "../../lib/format";
 import { insertStatements } from "../../lib/sql";
 import type { Cell, ExecuteResult, ResultSet } from "../../lib/types";
 import { useApp } from "../../store/app";
+import { PlanView, parsePlan } from "./PlanView";
 
 export function resultColumns(rs: ResultSet): GridColumn[] {
   return rs.columns.map((name, i) => {
@@ -115,6 +116,9 @@ export function ResultsPanel({
   }
 
   const isPlan = current?.kind === "rows" && current.columns.length === 1 && current.columns[0] === "QUERY PLAN";
+  // `EXPLAIN (FORMAT JSON)` arrives as a single cell of JSON, which is worth
+  // drawing as a tree; any other EXPLAIN stays the text the server produced.
+  const jsonPlan = isPlan && current.rows.length === 1 ? parsePlan(current.rows[0][0]) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -176,7 +180,9 @@ export function ResultsPanel({
 
       <div className="min-h-0 flex-1">
         {current?.kind === "rows" ? (
-          isPlan ? (
+          jsonPlan ? (
+            <PlanView plan={jsonPlan} />
+          ) : isPlan ? (
             <pre className="selectable h-full overflow-auto p-4 font-mono text-xs leading-relaxed text-fg">
               {current.rows.map((r) => r[0]).join("\n")}
             </pre>

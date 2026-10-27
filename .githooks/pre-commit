@@ -4,7 +4,8 @@
 # Skip with `git commit --no-verify`.
 set -e
 echo "pre-commit: biome, tsc, vitest, rustfmt, clippy"
-pnpm lint
+# A summary, because the full report is hundreds of lines of tracked warnings.
+pnpm exec biome check --reporter=summary
 pnpm typecheck
-pnpm test:unit
+pnpm exec vitest run --reporter=dot
 pnpm lint:rust

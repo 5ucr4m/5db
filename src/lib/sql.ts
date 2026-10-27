@@ -76,6 +76,38 @@ export function statementAt(sql: string, offset: number): StatementRange | null 
   return best ?? stmts[0];
 }
 
+/**
+ * What a normalized, upper-cased statement does that cannot be undone.
+ * Null when it is safe, or at least reversible.
+ */
+function reasonFor(s: string): string | null {
+  if (/^DROP\s/.test(s)) return "drops an object";
+  if (/^TRUNCATE\s/.test(s)) return "truncates a table";
+  if (/^ALTER\s+TABLE\s.+\sDROP\s/.test(s)) return "drops a column or constraint";
+  if (/^DELETE\s+FROM\s/.test(s) && !/\sWHERE\s/.test(s)) return "deletes every row (no WHERE clause)";
+  if (/^UPDATE\s/.test(s) && !/\sWHERE\s/.test(s)) return "updates every row (no WHERE clause)";
+  return null;
+}
+
+/**
+ * Looks past an EXPLAIN. Planning alone executes nothing, so `EXPLAIN DELETE`
+ * is harmless, but ANALYZE runs the statement for real and a destructive one
+ * behind it has to be judged on its own terms. Returns the statement that will
+ * actually run, or null when nothing will.
+ */
+function behindExplain(s: string): string | null {
+  const m = /^EXPLAIN\s*(?:\(([^)]*)\))?\s*/.exec(s);
+  if (!m) return s;
+  const options = m[1] ?? "";
+  let rest = s.slice(m[0].length);
+  // `EXPLAIN (ANALYZE)` and the older `EXPLAIN ANALYZE [VERBOSE]` spelling,
+  // but not `EXPLAIN (ANALYZE FALSE)`.
+  const parenthesized = /\bANALY[SZ]E\b/.test(options) && !/\bANALY[SZ]E\s+(FALSE|OFF|0)\b/.test(options);
+  const legacy = /^ANALY[SZ]E\b/.test(rest);
+  if (legacy) rest = rest.replace(/^ANALY[SZ]E\s+(VERBOSE\s+)?/, "");
+  return parenthesized || legacy ? rest : null;
+}
+
 /** Statements worth a confirmation on production connections. */
 export function destructiveReason(sql: string): string | null {
   for (const { text } of splitStatements(sql)) {
@@ -84,11 +116,9 @@ export function destructiveReason(sql: string): string | null {
       .replace(/\s+/g, " ")
       .trim()
       .toUpperCase();
-    if (/^DROP\s/.test(s)) return "drops an object";
-    if (/^TRUNCATE\s/.test(s)) return "truncates a table";
-    if (/^ALTER\s+TABLE\s.+\sDROP\s/.test(s)) return "drops a column or constraint";
-    if (/^DELETE\s+FROM\s/.test(s) && !/\sWHERE\s/.test(s)) return "deletes every row (no WHERE clause)";
-    if (/^UPDATE\s/.test(s) && !/\sWHERE\s/.test(s)) return "updates every row (no WHERE clause)";
+    const effective = behindExplain(s);
+    const reason = effective === null ? null : reasonFor(effective);
+    if (reason) return reason;
   }
   return null;
 }

@@ -11,6 +11,8 @@ All notable changes to 5db. The format follows
 - Connection secrets are kept in the OS keychain instead of the SQLite file.
   Existing connections are migrated on first launch, and a machine without a
   keychain keeps the previous behaviour and says so.
+- A query plan viewer: `EXPLAIN (FORMAT JSON)` rendered as a tree with per-node
+  self time, the slowest node highlighted and bad row estimates flagged.
 - The open connections, tabs and window geometry are restored on launch.
 - Signed releases and an in-app update check.
 - PostgreSQL `verify-ca`, and a PEM bundle for a private certificate authority,
@@ -39,6 +41,10 @@ All notable changes to 5db. The format follows
 
 ### Fixed
 
+- `EXPLAIN ANALYZE` on a destructive statement skipped the production
+  confirmation, because the check only looked at the first keyword and saw
+  `EXPLAIN`. ANALYZE really runs the statement, so it is now judged on what it
+  wraps; a plain `EXPLAIN`, which executes nothing, still asks nothing.
 - `interval` columns were classified as numeric, because `^(small|big)?int`
   matches the start of "interval". They were offered numeric filter operators
   instead of the time ones.

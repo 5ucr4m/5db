@@ -280,6 +280,26 @@ test("SQL editor: run, errors, multiple results, history and saved queries", asy
   await expect(page.locator("pre", { hasText: "SELECT * FROM nope_table" })).toHaveCount(1);
 });
 
+test("the query plan renders as a tree, with and without ANALYZE", async ({ page }) => {
+  await addConnection(page, PG_URL, "Shop");
+  await page.keyboard.press("Meta+t");
+  await page.locator(".cm-content").click();
+  await page.keyboard.type("SELECT c.name, count(*) FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY 1");
+
+  // Explain only plans, so there is a cost and no measured time.
+  await page.getByRole("button", { name: "Explain", exact: true }).click();
+  await expect(page.getByText("Estimates only.")).toBeVisible();
+  await expect(page.getByText(/Total cost/)).toBeVisible();
+  await expect(page.getByText("Hash Join").or(page.getByText("Merge Join")).or(page.getByText("Nested Loop")).first()).toBeVisible();
+  await expect(page.locator("main").getByText("customers", { exact: true }).first()).toBeVisible();
+
+  // Analyze runs it, so execution time and actual row counts appear.
+  await page.getByRole("button", { name: "Analyze", exact: true }).click();
+  await expect(page.getByText("Execution")).toBeVisible();
+  await expect(page.getByText(/actual/).first()).toBeVisible();
+  await expect(page.getByText("Estimates only.")).toHaveCount(0);
+});
+
 test("cancel a long running query", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
   await page.keyboard.press("Meta+t");

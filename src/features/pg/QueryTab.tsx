@@ -1,4 +1,4 @@
-import { Bookmark, Gauge, Library, Play, PlayCircle, Square } from "lucide-react";
+import { Bookmark, Gauge, Library, Play, PlayCircle, Square, Timer } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, IconButton, Input, Modal, Resizer, useResizable } from "../../components/ui";
 import { errorMessage, rpc } from "../../lib/rpc";
@@ -101,9 +101,15 @@ export function QueryTab({ session, tab, active }: { session: Session; tab: Quer
     if (r) void execute(r.text, r.offset);
   };
   const runAll = () => void execute(editor.current?.getValue() ?? "", 0);
-  const explain = () => {
+  // FORMAT JSON so the result renders as a tree. Analyze really runs the
+  // statement, which is why it is a separate button and goes through the same
+  // production confirmation as any other execution.
+  const explain = (analyze: boolean) => {
     const r = editor.current?.getRunnable();
-    if (r?.text.trim()) void execute(`EXPLAIN (VERBOSE) ${r.text.trim().replace(/;\s*$/, "")}`, -1_000_000);
+    const sql = r?.text.trim().replace(/;\s*$/, "");
+    if (!sql) return;
+    const options = analyze ? "ANALYZE, BUFFERS, VERBOSE, FORMAT JSON" : "VERBOSE, FORMAT JSON";
+    void execute(`EXPLAIN (${options}) ${sql}`, -1_000_000);
   };
   const cancel = async () => {
     try {
@@ -176,11 +182,21 @@ export function QueryTab({ session, tab, active }: { session: Session; tab: Quer
             size="sm"
             variant="ghost"
             icon={<Gauge className="size-3.5" />}
-            onClick={explain}
+            onClick={() => explain(false)}
             disabled={running}
-            title="Show the query plan"
+            title="Show the planner's estimate without running anything"
           >
             Explain
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<Timer className="size-3.5" />}
+            onClick={() => explain(true)}
+            disabled={running}
+            title="Run the statement and measure every node (EXPLAIN ANALYZE)"
+          >
+            Analyze
           </Button>
           <div className="mx-1 h-4 w-px bg-line" />
           <Button size="sm" variant="ghost" icon={<Bookmark className="size-3.5" />} onClick={() => save()} title="Save query (⌘S)">

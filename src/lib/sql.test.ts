@@ -105,6 +105,20 @@ describe("destructiveReason", () => {
   it("checks every statement in the batch, not just the first", () => {
     expect(destructiveReason("SELECT 1; DROP TABLE users")).toMatch(/drops an object/);
   });
+
+  it("sees a destructive statement behind EXPLAIN ANALYZE, which really runs it", () => {
+    expect(destructiveReason("EXPLAIN ANALYZE DELETE FROM orders")).toMatch(/every row/);
+    expect(destructiveReason("EXPLAIN ANALYZE VERBOSE DELETE FROM orders")).toMatch(/every row/);
+    expect(destructiveReason("EXPLAIN (ANALYZE) DELETE FROM orders")).toMatch(/every row/);
+    expect(destructiveReason("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) TRUNCATE orders")).toMatch(/truncates/);
+    expect(destructiveReason("explain (analyze) update orders set paid = true")).toMatch(/every row/);
+  });
+
+  it("leaves a plain EXPLAIN alone, because planning executes nothing", () => {
+    expect(destructiveReason("EXPLAIN DELETE FROM orders")).toBeNull();
+    expect(destructiveReason("EXPLAIN (VERBOSE, FORMAT JSON) DELETE FROM orders")).toBeNull();
+    expect(destructiveReason("EXPLAIN (ANALYZE FALSE) DELETE FROM orders")).toBeNull();
+  });
 });
 
 describe("insertStatements", () => {

@@ -32,7 +32,8 @@ A desktop client for **PostgreSQL** and **Redis** in the spirit of Postico, buil
 
 **SQL editor**
 - CodeMirror with the PostgreSQL dialect and autocomplete for tables and columns.
-- `⌘↵` runs the statement under the cursor (or the selection), `⇧⌘↵` runs everything; several result sets; `EXPLAIN`.
+- `⌘↵` runs the statement under the cursor (or the selection), `⇧⌘↵` runs everything; several result sets.
+- A **plan viewer**: Explain shows the planner's estimate without running anything, Analyze runs the statement and measures it. The plan is a tree with the time spent in each node on its own, the slowest node highlighted, and a warning where the row estimate was ten times or more out — which is usually why the plan is bad. Any `EXPLAIN (FORMAT JSON)` you type renders the same way.
 - Errors with SQLSTATE, detail and hint, and the offending fragment underlined in the editor.
 - **Cancel** long queries; a row limit with a truncation warning.
 - Transactions persist across executions (`BEGIN` … `COMMIT`), isolated from browsing.

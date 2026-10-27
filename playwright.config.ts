@@ -27,7 +27,9 @@ export default defineConfig({
       url: "http://127.0.0.1:1430/rpc",
       reuseExistingServer: true,
       timeout: 300_000,
-      env: { FIVEDB_DATA_DIR: ".e2e-data" },
+      // A throwaway data directory, and the file secret store rather than the
+      // developer's real keychain.
+      env: { FIVEDB_DATA_DIR: ".e2e-data", FIVEDB_SECRETS: "file" },
     },
     { command: "pnpm dev", url: "http://localhost:1420", reuseExistingServer: true },
   ],
