@@ -6,6 +6,10 @@ All notable changes to 5db. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-27
+
+First tagged release. Everything below landed on top of the initial commit.
+
 ### Added
 
 - Connection secrets are kept in the OS keychain instead of the SQLite file.
