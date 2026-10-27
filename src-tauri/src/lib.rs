@@ -25,7 +25,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Reopens the window where it was left, at the size it was left.
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // The updater is desktop-only, so it is registered here rather than
+            // in the builder chain.
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             let dir = app.path().app_data_dir()?;
             let state = AppState::new(dir).map_err(|e| e.message)?;
             app.manage(Arc::new(state));

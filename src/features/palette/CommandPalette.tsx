@@ -3,6 +3,7 @@ import {
   Bookmark,
   Clock,
   Database,
+  Download,
   Eye,
   FileCode2,
   Home,
@@ -20,6 +21,7 @@ import { createPortal } from "react-dom";
 import { cx, Kbd } from "../../components/ui";
 import { rpc } from "../../lib/rpc";
 import type { SavedQuery } from "../../lib/types";
+import { checkForUpdate } from "../../lib/updater";
 import { useApp } from "../../store/app";
 
 interface Item {
@@ -188,6 +190,13 @@ export function CommandPalette() {
       group: "App",
       icon: <Moon className="size-4" />,
       run: () => st.setTheme(st.theme === "dark" ? "light" : st.theme === "light" ? "system" : "dark"),
+    });
+    out.push({
+      id: "update",
+      label: "Check for updates",
+      group: "App",
+      icon: <Download className="size-4" />,
+      run: () => void checkForUpdate({ silent: false }),
     });
     return out;
   }, [session, saved, connections, q]);

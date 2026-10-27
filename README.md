@@ -96,6 +96,12 @@ pnpm tauri build    # produces the .app / installers in src-tauri/target/release
 
 CI builds macOS (universal), Windows and Linux on every `v*` tag, and on demand from the Actions tab.
 
+Tagged builds are signed for the updater, and the app checks
+`releases/latest/download/latest.json` shortly after launch; "Check for
+updates" in the command palette asks on demand. An update signed by anything
+other than the key in `tauri.conf.json` is refused. The macOS bundle is not yet
+Apple-signed or notarized, so the first launch needs right-click → Open.
+
 ## Architecture
 
 - `src-tauri/src/rpc.rs` — the single RPC surface (`dispatch`), used both by the Tauri `rpc` command and by the development HTTP bridge.

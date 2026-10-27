@@ -3,6 +3,8 @@ name = "fivedb"
 version = "0.1.0"
 description = "5db — a modern Postgres and Redis client"
 authors = ["Leve"]
+license = "MIT"
+repository = "https://github.com/5ucr4m/5db"
 edition = "2024"
 default-run = "fivedb"
 
@@ -40,6 +42,8 @@ tower-http = { version = "0.7.1", features = ["cors"], optional = true }
 tauri-plugin-dialog = "2.8.3"
 russh = "0.65.0"
 tauri-plugin-window-state = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -4,6 +4,7 @@ import { Home } from "./features/connections/Home";
 import { CommandPalette } from "./features/palette/CommandPalette";
 import { Rail } from "./features/workspace/Rail";
 import { Workspace } from "./features/workspace/Workspace";
+import { checkForUpdate } from "./lib/updater";
 import { useApp } from "./store/app";
 
 export default function App() {
@@ -16,6 +17,12 @@ export default function App() {
   useEffect(() => {
     void loadConnections().then(restoreWorkspace);
   }, [loadConnections, restoreWorkspace]);
+
+  // Look for a new version once, quietly; the palette has an explicit check.
+  useEffect(() => {
+    const t = setTimeout(() => void checkForUpdate({ silent: true }), 4000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Block the webview's own reload/find shortcuts; the app gives them meaning.
   useEffect(() => {
