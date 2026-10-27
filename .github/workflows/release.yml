@@ -125,10 +125,14 @@ jobs:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: 5db ${{ github.ref_name }}
           releaseBody: |
-            Instaladores para macOS (universal), Windows e Linux.
+            Installers for macOS (universal), Windows and Linux.
 
-            O macOS ainda não é assinado nem notarizado: na primeira abertura use
-            botão direito → Abrir, ou `xattr -dr com.apple.quarantine /Applications/5db.app`.
+            The macOS bundle is not yet signed or notarized: on first launch use
+            right-click → Open, or run
+            `xattr -dr com.apple.quarantine /Applications/5db.app`.
+
+            Publish this draft for the in-app updater to see it: GitHub only
+            serves `releases/latest/download` from a published release.
           releaseDraft: true
           prerelease: false
 
