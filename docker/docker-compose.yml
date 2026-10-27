@@ -2,7 +2,14 @@ name: 5db-test
 
 services:
   postgres:
-    image: postgres:17-alpine
+    build: ./pg
+    command:
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/tls/server.crt
+      - -c
+      - ssl_key_file=/tls/server.key
     environment:
       POSTGRES_USER: fivedb
       POSTGRES_PASSWORD: fivedb
@@ -11,16 +18,26 @@ services:
       - "54329:5432"
     volumes:
       - ./seed:/docker-entrypoint-initdb.d:ro
+    # pg_isready alone passes against the temporary server the entrypoint runs
+    # while the seed is still loading, and the container then restarts. Querying
+    # a seeded table only succeeds once the real server is up with data.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fivedb -d shop"]
+      test: ["CMD-SHELL", "pg_isready -U fivedb -d shop && psql -U fivedb -d shop -tAc 'select 1 from orders limit 1'"]
       interval: 2s
-      retries: 30
+      timeout: 5s
+      retries: 60
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--requirepass", "fivedb"]
     ports:
       - "63799:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a fivedb --no-auth-warning ping | grep -q PONG"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
 
   # SSH bastion: reaches postgres:5432 and redis:6379 on the compose network.
   ssh:

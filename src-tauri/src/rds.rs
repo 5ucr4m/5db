@@ -36,13 +36,30 @@ fn url(cfg: &ConnectionConfig, db: i64) -> String {
     };
     let host = if cfg.host.is_empty() { "127.0.0.1" } else { &cfg.host };
     let port = if cfg.port == 0 { 6379 } else { cfg.port };
-    // Managed Redis often uses self-signed certs; match the Postgres "prefer" stance.
-    let insecure = if cfg.tls { "#insecure" } else { "" };
+    // Only when the connection explicitly opts out of verification.
+    let insecure = if cfg.tls && cfg.tls_insecure { "#insecure" } else { "" };
     format!("{scheme}://{auth}{host}:{port}/{db}{insecure}")
 }
 
 pub async fn connect(cfg: &ConnectionConfig, db: i64) -> AppResult<RedisSession> {
-    let client = redis::Client::open(url(cfg, db))?;
+    let target = url(cfg, db);
+    // A private CA has to be handed to the client; the URL cannot carry it.
+    let client = if cfg.tls && !cfg.tls_insecure && !cfg.ssl_root_cert.is_empty() {
+        let mut root = Vec::new();
+        for pem in crate::pg::read_pem_certs(&cfg.ssl_root_cert)? {
+            root.extend_from_slice(&pem);
+            root.push(b'\n');
+        }
+        redis::Client::build_with_tls(
+            target,
+            redis::TlsCertificates {
+                client_tls: None,
+                root_cert: Some(root),
+            },
+        )?
+    } else {
+        redis::Client::open(target)?
+    };
     let config = ConnectionManagerConfig::new()
         .set_connection_timeout(Some(Duration::from_secs(8)))
         .set_response_timeout(Some(Duration::from_secs(30)))
@@ -436,4 +453,44 @@ pub async fn info(sess: &RedisSession) -> AppResult<Value> {
         _ => 16,
     };
     Ok(json!({ "sections": sections, "databases": databases }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::url;
+    use crate::store::ConnectionConfig;
+
+    fn cfg() -> ConnectionConfig {
+        ConnectionConfig {
+            host: "cache.example.com".into(),
+            port: 6380,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tls_verifies_the_certificate_unless_told_not_to() {
+        let mut c = cfg();
+        c.tls = true;
+        // No `#insecure`: the certificate is checked.
+        assert_eq!(url(&c, 0), "rediss://cache.example.com:6380/0");
+
+        c.tls_insecure = true;
+        assert_eq!(url(&c, 0), "rediss://cache.example.com:6380/0#insecure");
+    }
+
+    #[test]
+    fn opting_out_of_verification_does_nothing_without_tls() {
+        let mut c = cfg();
+        c.tls_insecure = true;
+        assert_eq!(url(&c, 2), "redis://cache.example.com:6380/2");
+    }
+
+    #[test]
+    fn credentials_are_percent_encoded() {
+        let mut c = cfg();
+        c.user = "read only".into();
+        c.password = "p@ss/word".into();
+        assert_eq!(url(&c, 0), "redis://read%20only:p%40ss%2Fword@cache.example.com:6380/0");
+    }
 }

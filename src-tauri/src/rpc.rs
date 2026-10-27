@@ -1,7 +1,7 @@
 //! Single RPC surface shared by the Tauri command and the dev HTTP bridge.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -15,8 +15,38 @@ use crate::rds::{self, RedisSession};
 use crate::ssh::{self, Tunnel};
 use crate::store::{ConnectionConfig, NewHistory, SavedQuery, Store};
 
+/// The destination of a file write comes from the frontend, which gets it from
+/// the native save dialog. Validate it anyway, so that a compromised frontend
+/// cannot turn this into an arbitrary write: absolute paths only, no traversal,
+/// an existing directory, and never inside the directory holding the
+/// credential store.
+fn write_target(state: &AppState, path: &str) -> AppResult<PathBuf> {
+    let p = Path::new(path);
+    if !p.is_absolute() {
+        return Err(AppError::msg("Refusing to write to a path that is not absolute."));
+    }
+    if p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(AppError::msg("Refusing to write to a path containing \"..\"."));
+    }
+    let name = p
+        .file_name()
+        .ok_or_else(|| AppError::msg("That destination has no file name."))?;
+    let dir = p
+        .parent()
+        .ok_or_else(|| AppError::msg("That destination has no directory."))?
+        .canonicalize()
+        .map_err(|_| AppError::msg("That destination directory does not exist."))?;
+    if let Ok(data) = state.data_dir.canonicalize()
+        && dir.starts_with(&data)
+    {
+        return Err(AppError::msg("Refusing to write inside 5db's own data directory."));
+    }
+    Ok(dir.join(name))
+}
+
 pub struct AppState {
     pub store: Store,
+    data_dir: PathBuf,
     pg: RwLock<HashMap<String, Arc<PgSession>>>,
     redis: RwLock<HashMap<String, Arc<RedisSession>>>,
     tunnels: Mutex<HashMap<String, Arc<Tunnel>>>,
@@ -26,8 +56,10 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(data_dir: PathBuf) -> AppResult<Self> {
+        let store = Store::open(&data_dir)?;
         Ok(AppState {
-            store: Store::open(&data_dir)?,
+            store,
+            data_dir,
             pg: RwLock::new(HashMap::new()),
             redis: RwLock::new(HashMap::new()),
             tunnels: Mutex::new(HashMap::new()),
@@ -284,11 +316,12 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
         "pg.exportCsv" => {
             let t: TableTarget = p(&params)?;
             let path: String = p(&params["path"])?;
+            let target = write_target(state, &path)?;
             pg::export_csv(
                 &*state.pg(&t.connection_id, t.database.as_deref()).await?,
                 &t.schema,
                 &t.table,
-                &path,
+                &target.to_string_lossy(),
             )
             .await
         }
@@ -387,7 +420,7 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
         "fs.writeText" => {
             let path: String = p(&params["path"])?;
             let contents: String = p(&params["contents"])?;
-            tokio::fs::write(&path, contents).await?;
+            tokio::fs::write(write_target(state, &path)?, contents).await?;
             Ok(Value::Null)
         }
 

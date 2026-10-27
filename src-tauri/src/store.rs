@@ -24,13 +24,23 @@ pub struct ConnectionConfig {
     pub user: String,
     pub password: String,
     pub database: String,
-    /// Postgres: "disable" | "prefer" | "require" | "verify-full"
+    /// Postgres: "disable" | "prefer" | "require" | "verify-ca" | "verify-full"
     pub ssl_mode: String,
+    /// PEM bundle used to verify the server certificate, for Postgres
+    /// verify-ca/verify-full and for Redis TLS. Empty uses the system store,
+    /// which is what managed providers with a public CA need.
+    pub ssl_root_cert: String,
     /// Redis: logical database index.
     pub redis_db: i64,
     /// Redis: connect with TLS (rediss://).
     pub tls: bool,
+    /// Redis: accept any server certificate. Off by default; turning it on
+    /// makes the connection vulnerable to interception.
+    pub tls_insecure: bool,
     pub read_only: bool,
+    /// Cancel any statement that runs longer than this, in milliseconds.
+    /// 0 leaves the server default (no limit) in place.
+    pub statement_timeout_ms: i64,
     /// Tunnel the connection through an SSH server.
     pub ssh_enabled: bool,
     pub ssh_host: String,

@@ -12,10 +12,16 @@ export interface ConnectionConfig {
   user: string;
   password: string;
   database: string;
-  sslMode: "disable" | "prefer" | "require" | "verify-full";
+  sslMode: "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
+  /** PEM bundle used to verify the server certificate. Empty = system store. */
+  sslRootCert: string;
   redisDb: number;
   tls: boolean;
+  /** Redis: accept any server certificate. Leaves the connection open to interception. */
+  tlsInsecure: boolean;
   readOnly: boolean;
+  /** Cancel statements longer than this, in ms. 0 = the server default. */
+  statementTimeoutMs: number;
   sshEnabled: boolean;
   sshHost: string;
   sshPort: number;

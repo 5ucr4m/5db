@@ -22,9 +22,12 @@ export function blankConnection(kind: ConnectionKind = "postgres"): ConnectionCo
     password: "",
     database: kind === "postgres" ? "postgres" : "",
     sslMode: "prefer",
+    sslRootCert: "",
     redisDb: 0,
     tls: false,
+    tlsInsecure: false,
     readOnly: false,
+    statementTimeoutMs: 0,
     sshEnabled: false,
     sshHost: "",
     sshPort: 22,
@@ -65,9 +68,11 @@ export function parseConnectionUrl(raw: string): Partial<ConnectionConfig> | nul
       password: dec(url.password),
       redisDb: path && /^\d+$/.test(path) ? Number(path) : 0,
       tls: scheme === "rediss",
+      tlsInsecure: false,
     };
   }
   const ssl = url.searchParams.get("sslmode");
+  const modes = ["disable", "require", "verify-ca", "verify-full"] as const;
   return {
     kind: "postgres",
     host: url.hostname || "localhost",
@@ -75,7 +80,8 @@ export function parseConnectionUrl(raw: string): Partial<ConnectionConfig> | nul
     user: dec(url.username) || "postgres",
     password: dec(url.password),
     database: path || "postgres",
-    sslMode: ssl === "disable" || ssl === "require" || ssl === "verify-full" ? ssl : ssl === "verify-ca" ? "verify-full" : "prefer",
+    sslMode: modes.find((m) => m === ssl) ?? "prefer",
+    sslRootCert: url.searchParams.get("sslrootcert") ?? "",
   };
 }
 

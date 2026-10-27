@@ -18,6 +18,19 @@ export function ConnectionForm({ open, initial, onClose }: { open: boolean; init
   const [showPw, setShowPw] = useState(false);
   const [test, setTest] = useState<TestState>({ status: "idle" });
   const [saving, setSaving] = useState(false);
+  // Only the modes that actually check the certificate can use a custom CA.
+  const needsRootCert = c.kind === "postgres" ? c.sslMode === "verify-ca" || c.sslMode === "verify-full" : c.tls && !c.tlsInsecure;
+
+  const pickRootCert = async () => {
+    const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+    const path = await openDialog({
+      multiple: false,
+      directory: false,
+      title: "Choose a root certificate",
+      filters: [{ name: "Certificate", extensions: ["pem", "crt", "cer"] }],
+    });
+    if (typeof path === "string") set("sslRootCert", path);
+  };
 
   useEffect(() => {
     if (open) {
@@ -260,8 +273,9 @@ export function ConnectionForm({ open, initial, onClose }: { open: boolean; init
             <Field label="SSL">
               <Select value={c.sslMode} onChange={(e) => set("sslMode", e.target.value as ConnectionConfig["sslMode"])}>
                 <option value="prefer">Prefer (use if available)</option>
-                <option value="require">Require</option>
-                <option value="verify-full">Require and verify certificate</option>
+                <option value="require">Require, no verification</option>
+                <option value="verify-ca">Verify certificate chain</option>
+                <option value="verify-full">Verify chain and hostname</option>
                 <option value="disable">Disable</option>
               </Select>
             </Field>
@@ -276,22 +290,87 @@ export function ConnectionForm({ open, initial, onClose }: { open: boolean; init
                 onChange={(e) => set("redisDb", Number(e.target.value.replace(/\D/g, "")) || 0)}
               />
             </Field>
-            <div className="flex items-end pb-1.5">
+            <div className="flex flex-col justify-end gap-2 pb-1.5">
               <Toggle checked={c.tls} onChange={(v) => set("tls", v)} label="Use TLS (rediss://)" />
+              {c.tls && (
+                <Toggle
+                  checked={c.tlsInsecure}
+                  onChange={(v) => set("tlsInsecure", v)}
+                  label={
+                    <span>
+                      Skip certificate check <span className="text-muted">— open to interception</span>
+                    </span>
+                  }
+                />
+              )}
             </div>
           </div>
         )}
 
+        {needsRootCert && (
+          <Field
+            label="Root certificate"
+            hint="PEM bundle for a private CA. Leave empty to use the system trust store, which is what a public CA needs."
+          >
+            <div className="flex gap-2">
+              <Input
+                mono
+                className="flex-1"
+                value={c.sslRootCert}
+                placeholder="/path/to/ca.pem"
+                onChange={(e) => set("sslRootCert", e.target.value)}
+              />
+              {isTauri && (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-8"
+                  icon={<FolderOpen className="size-3.5" />}
+                  onClick={pickRootCert}
+                  aria-label="Choose a certificate file"
+                />
+              )}
+            </div>
+          </Field>
+        )}
+
         {c.kind === "postgres" && (
-          <Toggle
-            checked={c.readOnly}
-            onChange={(v) => set("readOnly", v)}
-            label={
-              <span>
-                Read-only session <span className="text-muted">— the server rejects any write</span>
-              </span>
-            }
-          />
+          <>
+            <Toggle
+              checked={c.readOnly}
+              onChange={(v) => set("readOnly", v)}
+              label={
+                <span>
+                  Read-only session <span className="text-muted">— the server rejects any write</span>
+                </span>
+              }
+            />
+            <Field label="Statement timeout" hint="The server cancels anything slower. 0 leaves it unlimited.">
+              <div className="flex items-center gap-2">
+                <Input
+                  mono
+                  inputMode="numeric"
+                  className="w-28"
+                  value={c.statementTimeoutMs}
+                  onChange={(e) => set("statementTimeoutMs", Number(e.target.value.replace(/\D/g, "")) || 0)}
+                />
+                <span className="text-xs text-muted">ms</span>
+                {[0, 30_000, 120_000].map((ms) => (
+                  <button
+                    type="button"
+                    key={ms}
+                    onClick={() => set("statementTimeoutMs", ms)}
+                    className={cx(
+                      "rounded px-1.5 py-0.5 text-2xs",
+                      c.statementTimeoutMs === ms ? "bg-iris-soft text-iris" : "text-faint hover:text-fg",
+                    )}
+                  >
+                    {ms === 0 ? "off" : formatDuration(ms)}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          </>
         )}
 
         <SshSection c={c} set={set} />

@@ -50,13 +50,42 @@ pub struct PgSession {
     pub writer: Mutex<Option<PgConn>>,
 }
 
+/// Splits a PEM bundle into its certificates; a CA file often holds a chain.
+pub fn read_pem_certs(path: &str) -> AppResult<Vec<Vec<u8>>> {
+    let pem = std::fs::read_to_string(path)
+        .map_err(|e| AppError::msg(format!("Could not read the root certificate at {path}: {e}")))?;
+    const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    let mut out = Vec::new();
+    let mut rest = pem.as_str();
+    while let Some(i) = rest.find(BEGIN) {
+        let after = &rest[i..];
+        let end = after
+            .find("-----END CERTIFICATE-----")
+            .map(|e| e + "-----END CERTIFICATE-----".len())
+            .unwrap_or(after.len());
+        out.push(after.as_bytes()[..end].to_vec());
+        rest = &after[end..];
+    }
+    if out.is_empty() {
+        return Err(AppError::msg(format!("{path} holds no PEM certificate.")));
+    }
+    Ok(out)
+}
+
 fn tls_connector(cfg: &ConnectionConfig) -> AppResult<MakeTlsConnector> {
-    let verify = cfg.ssl_mode == "verify-full";
-    let connector = native_tls::TlsConnector::builder()
-        .danger_accept_invalid_certs(!verify)
-        .danger_accept_invalid_hostnames(!verify)
-        .build()?;
-    Ok(MakeTlsConnector::new(connector))
+    // Mirrors libpq: `require` encrypts without checking who is on the other
+    // end, `verify-ca` checks the chain, `verify-full` also checks the hostname.
+    let verify_chain = matches!(cfg.ssl_mode.as_str(), "verify-ca" | "verify-full");
+    let mut builder = native_tls::TlsConnector::builder();
+    builder
+        .danger_accept_invalid_certs(!verify_chain)
+        .danger_accept_invalid_hostnames(cfg.ssl_mode != "verify-full");
+    if !cfg.ssl_root_cert.is_empty() {
+        for der in read_pem_certs(&cfg.ssl_root_cert)? {
+            builder.add_root_certificate(native_tls::Certificate::from_pem(&der)?);
+        }
+    }
+    Ok(MakeTlsConnector::new(builder.build()?))
 }
 
 pub async fn connect(cfg: &ConnectionConfig, database: &str) -> AppResult<PgConn> {
@@ -70,7 +99,7 @@ pub async fn connect(cfg: &ConnectionConfig, database: &str) -> AppResult<PgConn
         .keepalives(true)
         .ssl_mode(match cfg.ssl_mode.as_str() {
             "disable" => tokio_postgres::config::SslMode::Disable,
-            "require" | "verify-full" => tokio_postgres::config::SslMode::Require,
+            "require" | "verify-ca" | "verify-full" => tokio_postgres::config::SslMode::Require,
             _ => tokio_postgres::config::SslMode::Prefer,
         });
     if !cfg.password.is_empty() {
@@ -88,6 +117,12 @@ pub async fn connect(cfg: &ConnectionConfig, database: &str) -> AppResult<PgConn
     });
     if cfg.read_only {
         client.batch_execute("SET default_transaction_read_only = on").await?;
+    }
+    if cfg.statement_timeout_ms > 0 {
+        // Integer-only interpolation: the value never comes from free text.
+        client
+            .batch_execute(&format!("SET statement_timeout = {}", cfg.statement_timeout_ms))
+            .await?;
     }
     Ok(PgConn { client, closed })
 }

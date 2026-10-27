@@ -606,3 +606,84 @@ async fn ssh_tunnels() {
     let e = dispatch(&s, "connections.test", bad).await.unwrap_err();
     assert!(e.message.contains("private key"), "{}", e.message);
 }
+
+/// The CA that signed the test server's certificate, written by
+/// `scripts/tls-certs.sh`.
+fn test_ca() -> String {
+    format!("{}/../docker/pg/ca.crt", env!("CARGO_MANIFEST_DIR"))
+}
+
+fn tls_cfg(ssl_mode: &str, root_cert: &str) -> Value {
+    json!({ "kind": "postgres", "host": "127.0.0.1", "port": 54329, "user": "fivedb",
+            "password": "fivedb", "database": "shop", "sslMode": ssl_mode, "sslRootCert": root_cert })
+}
+
+#[tokio::test]
+async fn pg_tls_modes() {
+    let s = state();
+
+    // `require` encrypts but asks nothing of the certificate, so a private CA
+    // the machine does not know is still accepted.
+    let ok = call(&s, "connections.test", tls_cfg("require", "")).await;
+    assert!(ok["version"].as_str().unwrap().contains("PostgreSQL"));
+
+    // Verifying without being told about the CA has to fail: that is the whole
+    // point of the mode.
+    for mode in ["verify-ca", "verify-full"] {
+        let err = dispatch(&s, "connections.test", tls_cfg(mode, ""))
+            .await
+            .expect_err(&format!("{mode} must reject an unknown CA"));
+        let msg = serde_json::to_string(&err).unwrap();
+        assert!(
+            msg.to_lowercase().contains("certificate") || msg.to_lowercase().contains("tls"),
+            "{mode} failed for the wrong reason: {msg}"
+        );
+    }
+
+    // With the CA both verifying modes succeed; the server certificate carries
+    // IP:127.0.0.1 in its SAN, which is what verify-full checks.
+    for mode in ["verify-ca", "verify-full"] {
+        let ok = call(&s, "connections.test", tls_cfg(mode, &test_ca())).await;
+        assert!(
+            ok["version"].as_str().unwrap().contains("PostgreSQL"),
+            "{mode} should connect with the CA supplied"
+        );
+    }
+
+    // A CA file that is not a certificate is reported, not silently ignored.
+    let err = dispatch(&s, "connections.test", tls_cfg("verify-full", "/nonexistent/ca.pem"))
+        .await
+        .expect_err("a missing CA file must be an error");
+    assert!(serde_json::to_string(&err).unwrap().contains("Could not read"));
+}
+
+#[tokio::test]
+async fn pg_statement_timeout_is_enforced() {
+    let s = state();
+    let saved = call(
+        &s,
+        "connections.save",
+        json!({ "name": "Slow", "kind": "postgres", "host": "127.0.0.1", "port": 54329, "user": "fivedb",
+                "password": "fivedb", "database": "shop", "sslMode": "disable", "statementTimeoutMs": 300 }),
+    )
+    .await;
+    let id = saved["id"].as_str().unwrap();
+
+    // pg.execute reports a statement error inside its result, not as an RPC failure.
+    let out = call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": id, "sql": "SELECT pg_sleep(3)" }),
+    )
+    .await;
+    // 57014 is query_canceled, which is how statement_timeout reports.
+    assert_eq!(out["error"]["code"], "57014", "unexpected result: {out}");
+    assert!(
+        out["durationMs"].as_f64().unwrap() < 2000.0,
+        "it should have stopped well before the 3s sleep"
+    );
+
+    // A quick statement on the same connection is unaffected.
+    let ok = call(&s, "pg.execute", json!({ "connectionId": id, "sql": "SELECT 1" })).await;
+    assert_eq!(ok["results"][0]["rows"][0][0], "1");
+}

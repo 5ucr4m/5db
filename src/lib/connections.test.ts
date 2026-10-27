@@ -11,6 +11,7 @@ describe("parseConnectionUrl — postgres", () => {
       password: "s3cret",
       database: "shop",
       sslMode: "require",
+      sslRootCert: "",
     });
   });
 
@@ -31,8 +32,14 @@ describe("parseConnectionUrl — postgres", () => {
     expect(parseConnectionUrl("postgres://u:p%40ss%2Fword@h/db")?.password).toBe("p@ss/word");
   });
 
-  it("maps sslmode=verify-ca onto the strictest mode it supports", () => {
-    expect(parseConnectionUrl("postgres://h/db?sslmode=verify-ca")?.sslMode).toBe("verify-full");
+  it("keeps every sslmode it supports, verify-ca included", () => {
+    expect(parseConnectionUrl("postgres://h/db?sslmode=verify-ca")?.sslMode).toBe("verify-ca");
+    expect(parseConnectionUrl("postgres://h/db?sslmode=verify-full")?.sslMode).toBe("verify-full");
+    expect(parseConnectionUrl("postgres://h/db?sslmode=disable")?.sslMode).toBe("disable");
+  });
+
+  it("reads a CA bundle path out of the query string", () => {
+    expect(parseConnectionUrl("postgres://h/db?sslmode=verify-full&sslrootcert=/etc/ssl/rds.pem")?.sslRootCert).toBe("/etc/ssl/rds.pem");
   });
 
   it("ignores an sslmode it does not know", () => {
@@ -50,6 +57,7 @@ describe("parseConnectionUrl — redis", () => {
       password: "fivedb",
       redisDb: 3,
       tls: false,
+      tlsInsecure: false,
     });
   });
 
@@ -84,6 +92,11 @@ describe("blankConnection", () => {
   it("defaults the port and credentials per kind", () => {
     expect(blankConnection("postgres")).toMatchObject({ port: 5432, user: "postgres", database: "postgres" });
     expect(blankConnection("redis")).toMatchObject({ port: 6379, user: "", database: "" });
+  });
+
+  it("defaults to verifying TLS and to no statement timeout", () => {
+    expect(blankConnection("redis").tlsInsecure).toBe(false);
+    expect(blankConnection("postgres").statementTimeoutMs).toBe(0);
   });
 });
 
