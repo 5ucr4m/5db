@@ -23,17 +23,23 @@ jobs:
             name: macos
             display: macOS (universal)
             args: --target universal-apple-darwin
-            bundle: src-tauri/target/universal-apple-darwin/release/bundle
+            installers: |
+              src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           - os: ubuntu-22.04
             name: linux
             display: Linux (x86_64)
             args: ""
-            bundle: src-tauri/target/release/bundle
+            installers: |
+              src-tauri/target/release/bundle/deb/*.deb
+              src-tauri/target/release/bundle/rpm/*.rpm
+              src-tauri/target/release/bundle/appimage/*.AppImage
           - os: windows-latest
             name: windows
             display: Windows (x86_64)
             args: ""
-            bundle: src-tauri/target/release/bundle
+            installers: |
+              src-tauri/target/release/bundle/msi/*.msi
+              src-tauri/target/release/bundle/nsis/*.exe
 
     steps:
       - uses: actions/checkout@v5
@@ -126,6 +132,6 @@ jobs:
         if: github.ref_type != 'tag'
         with:
           name: 5db-${{ matrix.name }}
-          path: ${{ matrix.bundle }}
+          path: ${{ matrix.installers }}
           if-no-files-found: error
           retention-days: 7
