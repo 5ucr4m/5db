@@ -3,9 +3,18 @@
 # through the `prepare` script, which points core.hooksPath here.
 # Skip with `git commit --no-verify`.
 set -e
-echo "pre-commit: biome, tsc, vitest, rustfmt, clippy"
-# A summary, because the full report is hundreds of lines of tracked warnings.
-pnpm exec biome check --reporter=summary
-pnpm typecheck
-pnpm exec vitest run --reporter=dot
-pnpm lint:rust
+run() {
+  name=$1
+  shift
+  if ! out=$("$@" 2>&1); then
+    printf '%s\n' "$out"
+    echo "pre-commit: $name failed"
+    exit 1
+  fi
+  echo "  ok $name"
+}
+echo "pre-commit:"
+run biome pnpm exec biome check
+run tsc pnpm exec tsc --noEmit
+run vitest pnpm exec vitest run --reporter=dot
+run rust pnpm lint:rust
