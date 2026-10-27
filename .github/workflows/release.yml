@@ -1,0 +1,106 @@
+name: Release
+
+# Tag push builds and drafts a GitHub release; manual runs just build and keep
+# the bundles as artifacts, which is how you verify the three platforms without
+# cutting a version.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: ${{ matrix.display }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+            display: macOS (universal)
+            args: --target universal-apple-darwin
+            bundle: src-tauri/target/universal-apple-darwin/release/bundle
+          - os: ubuntu-22.04
+            name: linux
+            display: Linux (x86_64)
+            args: ""
+            bundle: src-tauri/target/release/bundle
+          - os: windows-latest
+            name: windows
+            display: Windows (x86_64)
+            args: ""
+            bundle: src-tauri/target/release/bundle
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # WebKitGTK is the webview Tauri renders into; libssl is for native-tls.
+      - name: System dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libxdo-dev libssl-dev build-essential file
+
+      # russh pulls aws-lc-sys, whose assembly needs NASM on Windows.
+      - name: NASM (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: macOS cross targets
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.name }}
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build bundles
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Unset until an Apple Developer certificate is added; the build is
+          # simply unsigned while they are empty.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: 5db ${{ github.ref_name }}
+          releaseBody: |
+            Instaladores para macOS (universal), Windows e Linux.
+
+            O macOS ainda não é assinado nem notarizado: na primeira abertura use
+            botão direito → Abrir, ou `xattr -dr com.apple.quarantine /Applications/5db.app`.
+          releaseDraft: true
+          prerelease: false
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type != 'tag'
+        with:
+          name: 5db-${{ matrix.name }}
+          path: ${{ matrix.bundle }}
+          if-no-files-found: error
+          retention-days: 7
