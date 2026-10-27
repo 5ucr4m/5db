@@ -1,104 +1,110 @@
 # 5db
 
-Cliente desktop para **PostgreSQL** e **Redis**, no espírito do Postico, construído com Tauri 2 (Rust) + React. App nativo de ~8 MB.
+A desktop client for **PostgreSQL** and **Redis** in the spirit of Postico, built with Tauri 2 (Rust) + React. A native app of about 8 MB.
 
-## Recursos
+## Features
 
-**Conexões**
-- Cadastro, edição, duplicação e exclusão de conexões salvas localmente (SQLite no diretório de dados do app, arquivo com permissão `0600`).
-- **Testar conexão** antes de salvar, com versão do servidor e latência; erros do servidor exibidos como vieram.
-- Importação por URL (`postgres://…`, `redis://…`, `rediss://…`).
-- Cor e **ambiente** (local, dev, staging, produção). Conexões de produção ganham uma faixa listrada no topo e pedem confirmação antes de `DROP`, `TRUNCATE`, `DELETE`/`UPDATE` sem `WHERE` e de salvar edições.
-- Sessão **somente leitura** (o servidor rejeita escritas).
-- SSL (prefer, require, verify-full) e TLS para Redis.
-- **Túnel SSH** com senha ou chave privada (com passphrase).
-- Várias conexões abertas ao mesmo tempo, alternadas pelo trilho lateral.
+**Connections**
+- Create, edit, duplicate and delete connections saved locally (SQLite in the app data directory, file mode `0600`).
+- **Test a connection** before saving, with the server version and the latency; server errors are shown exactly as they came.
+- Import from a URL (`postgres://…`, `redis://…`, `rediss://…`).
+- A colour and an **environment** (local, dev, staging, production). Production connections get a striped band across the top and ask for confirmation before `DROP`, `TRUNCATE`, a `DELETE`/`UPDATE` without `WHERE`, and before saving edits.
+- **Read-only** sessions (the server rejects every write).
+- PostgreSQL SSL in all five libpq modes (disable, prefer, require, verify-ca, verify-full) and TLS for Redis, **both verifying the certificate by default**. A private CA (RDS, Supabase, Cloud SQL, internal infrastructure) is supplied as a PEM file; skipping verification is an explicit, labelled choice.
+- A **statement timeout** per connection: the server cancels anything slower. Zero leaves it unlimited.
+- An **SSH tunnel** with a password or a private key (passphrase supported).
+- Many connections open at once, switched from the side rail.
 
 **PostgreSQL**
-- Navegador de schemas, tabelas, views, materialized views, tabelas estrangeiras e funções, com busca e estimativa de linhas. Troca de database.
-- Grade virtualizada (linhas e colunas) com tipos coloridos por família, redimensionamento e auto-ajuste de colunas, seleção por célula/intervalo/linha, cópia em TSV.
-- **Ordenação** clicando no cabeçalho (Shift+clique para múltiplas colunas).
-- **Filtros** visuais por coluna com operadores tipados (=, ≠, <, >, entre, contém, começa/termina com, regex, é um de, nulo, vazio, verdadeiro/falso), modo "todos/qualquer", condição SQL livre e busca em todas as colunas.
-- Paginação com contagem (estimada em tabelas enormes).
-- **Edição**: duplo clique ou digitação direta, inserção de linhas (valores DEFAULT), exclusão, "Set NULL". As mudanças ficam pendentes, podem ser revisadas como SQL e são salvas numa **única transação** (`⌘S`), tudo ou nada. Tabelas sem chave primária são editadas por `ctid`.
-- Inspetor de linha com JSON formatado.
-- Navegação por **chave estrangeira** (abre a linha referenciada).
-- Abas de **estrutura** (colunas, índices, FKs, referências de entrada, constraints, triggers) e **DDL** gerado.
-- Exportar CSV, JSON, Markdown e `INSERT`; exportação da tabela inteira via `COPY`.
-- Truncate, drop e refresh de materialized view.
-- **Atividade do servidor** (`pg_stat_activity`) com cancelar/terminar backends.
+- A browser for schemas, tables, views, materialized views, foreign tables and functions, with search and a row estimate. Switch database.
+- A virtualized grid (rows and columns) with types coloured by family, column resizing and auto-fit, selection by cell, range or row, and copy as TSV.
+- **Sorting** by clicking a header (shift-click for several columns).
+- Visual per-column **filters** with typed operators (=, ≠, <, >, between, contains, starts/ends with, regex, is one of, null, empty, true/false), an all/any mode, a free-form SQL condition and search across every column.
+- Pagination with a count (estimated on very large tables).
+- **Editing**: double-click or type straight into a cell, insert rows (DEFAULT values), delete, "Set NULL". Changes stay pending, can be reviewed as SQL, and are saved in a **single transaction** (`⌘S`), all or nothing. Tables without a primary key are edited by `ctid`.
+- A row inspector with formatted JSON.
+- **Foreign key** navigation (opens the referenced row).
+- **Structure** tabs (columns, indexes, foreign keys, incoming references, constraints, triggers) and generated **DDL**.
+- Export as CSV, JSON, Markdown and `INSERT`; export a whole table through `COPY`.
+- Truncate, drop and refresh a materialized view.
+- **Server activity** (`pg_stat_activity`) with cancel and terminate for backends.
 
-**Editor SQL**
-- CodeMirror com dialeto PostgreSQL e autocomplete de tabelas e colunas.
-- `⌘↵` executa o statement sob o cursor (ou a seleção), `⇧⌘↵` executa tudo; vários result sets; `EXPLAIN`.
-- Erros com SQLSTATE, detalhe e dica, e o trecho com erro sublinhado no editor.
-- **Cancelar** queries longas; limite de linhas com aviso de truncamento.
-- Transações persistem entre execuções (`BEGIN` … `COMMIT`), isoladas da navegação.
-- **Histórico** de tudo que foi executado (duração, linhas, erro), com busca, reexecução e remoção.
-- **Queries salvas** com nome (`⌘S`).
+**SQL editor**
+- CodeMirror with the PostgreSQL dialect and autocomplete for tables and columns.
+- `⌘↵` runs the statement under the cursor (or the selection), `⇧⌘↵` runs everything; several result sets; `EXPLAIN`.
+- Errors with SQLSTATE, detail and hint, and the offending fragment underlined in the editor.
+- **Cancel** long queries; a row limit with a truncation warning.
+- Transactions persist across executions (`BEGIN` … `COMMIT`), isolated from browsing.
+- A **history** of everything executed (duration, rows, error), with search, re-run and delete.
+- **Saved queries** with a name (`⌘S`).
 
 **Redis**
-- Navegação com `SCAN` (sem bloquear o servidor), padrão de busca, filtro por tipo, visão em árvore por namespace, carregamento incremental, troca de db com contagem de chaves.
-- Visualização e edição por tipo: string (JSON formatado), hash, list, set, sorted set e stream.
-- TTL (definir, remover), renomear, excluir, criar chave.
-- **Console** com histórico (↑ ↓) e saída no formato do `redis-cli`.
-- Painel do servidor (memória, ops/s, taxa de acerto, keyspace e todo o `INFO`).
+- Browsing with `SCAN` (never blocking the server), a match pattern, a type filter, a tree view by namespace, incremental loading, and switching db with a key count.
+- Viewing and editing per type: string (formatted JSON), hash, list, set, sorted set and stream.
+- TTL (set, remove), rename, delete, create key.
+- A **console** with history (↑ ↓) and output in `redis-cli` format.
+- A server panel (memory, ops/s, hit rate, keyspace and the whole `INFO`).
 
-**Geral**
-- Paleta de comandos `⌘K`, abas com pré-visualização, tema claro/escuro/sistema.
+**General**
+- A `⌘K` command palette, tabs with preview, light/dark/system theme.
 
-## Atalhos
+## Shortcuts
 
-| Atalho | Ação |
+| Shortcut | Action |
 | --- | --- |
-| `⌘K` | Paleta de comandos |
-| `⌘N` | Nova conexão (tela inicial) |
-| `⌘T` / `⌘W` | Nova query / fechar aba |
-| `⌘1`…`⌘9`, `⇧⌘[` `⇧⌘]` | Trocar de aba |
-| `⌘↵` / `⇧⌘↵` | Executar statement / tudo |
-| `⌘S` | Salvar edições da tabela ou a query |
-| `⌘R` | Recarregar tabela |
-| `⌘F` / `⇧⌘F` | Buscar / adicionar filtro |
-| `⌘I` | Inspetor de linha |
-| `⌘⌫` | Excluir linhas selecionadas |
+| `⌘K` | Command palette |
+| `⌘N` | New connection (home screen) |
+| `⌘T` / `⌘W` | New query / close tab |
+| `⌘1`…`⌘9`, `⇧⌘[` `⇧⌘]` | Switch tab |
+| `⌘↵` / `⇧⌘↵` | Run the statement / run everything |
+| `⌘S` | Save table edits or the query |
+| `⌘R` | Reload the table |
+| `⌘F` / `⇧⌘F` | Search / add a filter |
+| `⌘I` | Row inspector |
+| `⌘⌫` | Delete the selected rows |
 
-## Desenvolvimento
+## Development
 
-Requisitos: Rust estável, Node 22 + pnpm, Docker.
+Requirements: stable Rust, Node 22 + pnpm, Docker. The exact versions are pinned in `rust-toolchain.toml` and in `packageManager`.
 
 ```sh
 pnpm install
-pnpm db:up          # Postgres (54329), Redis (63799) e bastion SSH (22229) com dados de teste
-pnpm tauri dev      # app nativo
+pnpm db:up          # Postgres (54329), Redis (63799) and an SSH bastion (22229) with test data
+pnpm tauri dev      # the native app
 ```
 
-Para trabalhar só na interface no navegador, rode `pnpm bridge` (expõe o mesmo RPC do app em `127.0.0.1:1430`) e `pnpm dev`, e abra `http://localhost:1420`.
+To work on the interface alone in a browser, run `pnpm bridge` (which exposes the app's own RPC on `127.0.0.1:1430`) and `pnpm dev`, then open `http://localhost:1420`.
 
-### Testes
+### Tests
 
 ```sh
-pnpm test:backend   # integração do Rust contra os containers (inclui túnel SSH e cancelamento)
-pnpm test:e2e       # Playwright em Chromium e WebKit (motor do WKWebView do macOS)
-pnpm test:native    # smoke test dentro do app Tauri real, pela ponte IPC (macOS)
-pnpm test           # typecheck + backend + e2e
+pnpm check          # lint, types and unit tests — needs no Docker
+pnpm test:unit      # vitest over the pure logic in src/lib
+pnpm test:backend   # Rust unit and integration tests against the containers (SSH tunnel, TLS, cancellation)
+pnpm test:e2e       # Playwright in Chromium and WebKit (the engine behind macOS WKWebView)
+pnpm test:native    # a smoke test inside the real Tauri app, over the IPC bridge (macOS)
+pnpm test           # check + backend + e2e
 ```
+
+`pnpm fmt` formats everything (Biome for TypeScript, rustfmt for Rust); `pnpm lint` and `pnpm lint:rust` check without writing.
 
 ### Build
 
 ```sh
-pnpm tauri build    # gera o .app / instaladores em src-tauri/target/release/bundle
+pnpm tauri build    # produces the .app / installers in src-tauri/target/release/bundle
 ```
 
-## Arquitetura
+CI builds macOS (universal), Windows and Linux on every `v*` tag, and on demand from the Actions tab.
 
-- `src-tauri/src/rpc.rs` — superfície RPC única (`dispatch`), usada pelo comando Tauri `rpc` e pelo bridge HTTP de desenvolvimento.
-- `src-tauri/src/pg.rs` — sessões Postgres (uma conexão para navegação, outra para o editor, outra para edições), introspecção, filtros com parâmetros tipados, edições transacionais, execução de SQL com streaming e cancelamento.
-- `src-tauri/src/rds.rs` — Redis (`ConnectionManager`), SCAN, leitura por tipo, comandos e `INFO`.
-- `src-tauri/src/ssh.rs` — túneis SSH (russh) com porta local efêmera.
-- `src-tauri/src/store.rs` — conexões, histórico, queries salvas e preferências em SQLite.
-- `src/` — React 19 + Zustand + Tailwind 4; grade virtualizada própria (`components/grid/DataGrid.tsx`); CodeMirror carregado sob demanda.
+## Architecture
 
-Valores trafegam como texto (`col::text`), o que preserva qualquer tipo (enums, arrays, ranges, jsonb) sem perda; os tipos vêm do catálogo e orientam filtros, edição e cores.
+- `src-tauri/src/rpc.rs` — the single RPC surface (`dispatch`), used both by the Tauri `rpc` command and by the development HTTP bridge.
+- `src-tauri/src/pg.rs` — Postgres sessions (one connection for browsing, one for the editor, one for edits), introspection, filters with typed parameters, transactional edits, streaming SQL execution and cancellation.
+- `src-tauri/src/rds.rs` — Redis (`ConnectionManager`), SCAN, typed reads, commands and `INFO`.
+- `src-tauri/src/ssh.rs` — SSH tunnels (russh) on an ephemeral local port.
+- `src-tauri/src/store.rs` — connections, history, saved queries and small settings in SQLite.
+- `src/` — React 19 + Zustand + Tailwind 4; a hand-written virtualized grid (`components/grid/DataGrid.tsx`); CodeMirror loaded on demand.
 
-`pnpm db:up` gera `docker/ssh/test_ed25519`, uma chave **somente para testes** do bastion local.
-Ela não está no repositório; `scripts/ssh-key.sh` a recria quando falta.
+Values travel as text (`col::text`), which preserves any type (enums, arrays, ranges, jsonb) without loss; the types come from the catalog and drive filters, editing and colours.
+
+`pnpm db:up` generates the **test-only** key material the containers use, and none of it lives in the repository: `scripts/ssh-key.sh` creates the bastion key and `scripts/tls-certs.sh` creates the CA and the certificate the test Postgres serves TLS with.
