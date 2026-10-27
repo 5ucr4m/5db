@@ -88,6 +88,9 @@ keyed by primary key or, when there is none, by `ctid`.
 - **Docker fixtures hold generated key material.** `scripts/ssh-key.sh` and
   `scripts/tls-certs.sh` create it on demand and it is gitignored. Never commit
   a key or a certificate.
+- **`Badge` upper-cases its content.** Right for a status word, wrong for an
+  identifier — a Postgres channel or an object name must be shown exactly as it
+  is. Pass `normal-case` for those.
 - **Tailwind 4 CSS is excluded from Biome** (`src/styles.css`); its at-rules are
   not in Biome's grammar yet.
 - **`russh` pulls `aws-lc-sys`**, which needs NASM on Windows and CMake

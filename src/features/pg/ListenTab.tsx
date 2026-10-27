@@ -131,8 +131,10 @@ export function ListenTab({ session, active }: { session: Session; active: boole
         {channels.length === 0 ? (
           <span className="text-xs text-faint">Not listening on any channel.</span>
         ) : (
+          // normal-case: Badge upper-cases by default, and a channel name is a
+          // case-sensitive identifier that has to read exactly as it is.
           channels.map((c) => (
-            <Badge key={c} className="gap-1 font-mono">
+            <Badge key={c} className="gap-1 font-mono normal-case">
               {c}
               <button
                 type="button"
