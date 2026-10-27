@@ -6,6 +6,8 @@ export interface ConnectionConfig {
   name: string;
   kind: ConnectionKind;
   color: string;
+  /** Free-text folder in the connection list. Empty means ungrouped. */
+  group: string;
   env: EnvTag;
   host: string;
   port: number;

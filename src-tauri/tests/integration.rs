@@ -762,3 +762,82 @@ async fn secrets_never_reach_the_database_file() {
     assert!(found.is_empty(), "plaintext secrets on disk: {found:?}");
     assert_eq!(used["results"][0]["rows"][0][0], "1");
 }
+
+#[tokio::test]
+async fn listen_notify() {
+    let s = state();
+    let id = pg_conn(&s).await;
+    let target = json!({ "connectionId": id, "database": "shop" });
+
+    // Nothing has been listened to, so polling must not open a connection or fail.
+    let idle = call(&s, "pg.notifications", target.clone()).await;
+    assert_eq!(idle["channels"].as_array().unwrap().len(), 0);
+    assert_eq!(idle["notices"].as_array().unwrap().len(), 0);
+
+    let mut listen = target.clone();
+    listen["channel"] = json!("orders_changed");
+    let feed = call(&s, "pg.listen", listen.clone()).await;
+    assert_eq!(feed["channels"][0], "orders_changed");
+
+    // Collects whatever has arrived, giving the notification time to land.
+    async fn poll(s: &AppState, target: &Value) -> Vec<Value> {
+        let mut out = Vec::new();
+        for _ in 0..50 {
+            let feed = call(s, "pg.notifications", target.clone()).await;
+            out.extend(feed["notices"].as_array().unwrap().clone());
+            if !out.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        out
+    }
+
+    let mut notify = listen.clone();
+    notify["payload"] = json!("{\"id\":7}");
+    call(&s, "pg.notify", notify.clone()).await;
+
+    let notices = poll(&s, &target).await;
+    assert_eq!(notices.len(), 1, "expected exactly one notification: {notices:?}");
+    assert_eq!(notices[0]["channel"], "orders_changed");
+    assert_eq!(notices[0]["payload"], "{\"id\":7}");
+    assert!(notices[0]["pid"].as_i64().unwrap() > 0);
+
+    // Draining is destructive: the same notification is not delivered twice.
+    let again = call(&s, "pg.notifications", target.clone()).await;
+    assert_eq!(again["notices"].as_array().unwrap().len(), 0);
+
+    // A NOTIFY from anywhere else reaches the listener just the same.
+    call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": id, "database": "shop", "sql": "NOTIFY orders_changed, 'from the editor'" }),
+    )
+    .await;
+    let notices = poll(&s, &target).await;
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["payload"], "from the editor");
+
+    // A channel that is not listened to delivers nothing.
+    let mut other = target.clone();
+    other["channel"] = json!("something_else");
+    call(&s, "pg.notify", other).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let quiet = call(&s, "pg.notifications", target.clone()).await;
+    assert_eq!(quiet["notices"].as_array().unwrap().len(), 0);
+
+    // After UNLISTEN the channel is gone and its notifications stop arriving.
+    call(&s, "pg.unlisten", listen.clone()).await;
+    call(&s, "pg.notify", notify).await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let after = call(&s, "pg.notifications", target).await;
+    assert_eq!(after["channels"].as_array().unwrap().len(), 0);
+    assert_eq!(after["notices"].as_array().unwrap().len(), 0);
+
+    // An empty channel name is refused rather than sent.
+    let mut bad = listen;
+    bad["channel"] = json!("  ");
+    dispatch(&s, "pg.listen", bad)
+        .await
+        .expect_err("an empty channel must be refused");
+}

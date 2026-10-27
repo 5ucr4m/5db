@@ -88,7 +88,9 @@ fn tls_connector(cfg: &ConnectionConfig) -> AppResult<MakeTlsConnector> {
     Ok(MakeTlsConnector::new(builder.build()?))
 }
 
-pub async fn connect(cfg: &ConnectionConfig, database: &str) -> AppResult<PgConn> {
+/// The driver config a connection to this database needs. Shared so every kind
+/// of connection — browsing, editor, writer, listener — agrees on the details.
+fn pg_config(cfg: &ConnectionConfig, database: &str) -> tokio_postgres::Config {
     let mut pc = tokio_postgres::Config::new();
     pc.host(if cfg.host.is_empty() { "localhost" } else { &cfg.host })
         .port(if cfg.port == 0 { 5432 } else { cfg.port })
@@ -105,6 +107,11 @@ pub async fn connect(cfg: &ConnectionConfig, database: &str) -> AppResult<PgConn
     if !cfg.password.is_empty() {
         pc.password(&cfg.password);
     }
+    pc
+}
+
+pub async fn connect(cfg: &ConnectionConfig, database: &str) -> AppResult<PgConn> {
+    let pc = pg_config(cfg, database);
     let tls = tls_connector(cfg)?;
     let (client, connection) = tokio::time::timeout(Duration::from_secs(12), pc.connect(tls))
         .await
@@ -1129,4 +1136,149 @@ pub async fn export_csv(s: &PgSession, schema: &str, table: &str, path: &str) ->
     }
     file.flush().await?;
     Ok(json!({ "bytes": bytes }))
+}
+
+// ---------------------------------------------------------------------------
+// LISTEN / NOTIFY
+// ---------------------------------------------------------------------------
+
+/// One `NOTIFY` as it arrived.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notice {
+    pub channel: String,
+    pub payload: String,
+    /// Backend pid of whoever sent it.
+    pub pid: i32,
+    pub at: String,
+}
+
+/// A connection kept open only to receive notifications. The ordinary clients
+/// throw their async messages away, so this one drives its own stream and
+/// buffers what arrives until the frontend asks for it.
+pub struct Listener {
+    client: Client,
+    queue: std::sync::Mutex<std::collections::VecDeque<Notice>>,
+    channels: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    closed: Arc<AtomicBool>,
+}
+
+/// Enough to survive a burst without letting a forgotten tab grow without end.
+const NOTICE_CAPACITY: usize = 2000;
+
+impl Listener {
+    pub async fn open(cfg: &ConnectionConfig, database: &str) -> AppResult<Arc<Self>> {
+        let mut pc = pg_config(cfg, database);
+        pc.application_name("5db listener");
+        let tls = tls_connector(cfg)?;
+        let (client, mut connection) = tokio::time::timeout(Duration::from_secs(12), pc.connect(tls))
+            .await
+            .map_err(|_| AppError::msg("Timed out after 12s while opening the notification connection."))??;
+
+        let listener = Arc::new(Listener {
+            client,
+            queue: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            channels: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+            closed: Arc::new(AtomicBool::new(false)),
+        });
+
+        let weak = Arc::downgrade(&listener);
+        tokio::spawn(async move {
+            // poll_message is the only way to see notifications; awaiting the
+            // connection, which is what every other client here does, drops them.
+            let mut stream = futures_util::stream::poll_fn(move |cx| connection.poll_message(cx));
+            while let Some(message) = stream.next().await {
+                let Some(listener) = weak.upgrade() else { break };
+                match message {
+                    Ok(tokio_postgres::AsyncMessage::Notification(n)) => {
+                        let mut q = listener.queue.lock().unwrap_or_else(|e| e.into_inner());
+                        if q.len() >= NOTICE_CAPACITY {
+                            q.pop_front();
+                        }
+                        q.push_back(Notice {
+                            channel: n.channel().to_string(),
+                            payload: n.payload().to_string(),
+                            pid: n.process_id(),
+                            at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                        });
+                    }
+                    // A server NOTICE is not a notification; nothing here needs it.
+                    Ok(_) => {}
+                    Err(_) => {
+                        listener.closed.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                }
+            }
+            if let Some(listener) = weak.upgrade() {
+                listener.closed.store(true, Ordering::Relaxed);
+            }
+        });
+
+        Ok(listener)
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed) || self.client.is_closed()
+    }
+
+    pub async fn listen(&self, channel: &str) -> AppResult<()> {
+        let name = valid_channel(channel)?;
+        self.client
+            .batch_execute(&format!("LISTEN {}", quote_ident(&name)))
+            .await?;
+        self.channels.lock().unwrap_or_else(|e| e.into_inner()).insert(name);
+        Ok(())
+    }
+
+    pub async fn unlisten(&self, channel: &str) -> AppResult<()> {
+        let name = valid_channel(channel)?;
+        self.client
+            .batch_execute(&format!("UNLISTEN {}", quote_ident(&name)))
+            .await?;
+        self.channels.lock().unwrap_or_else(|e| e.into_inner()).remove(&name);
+        Ok(())
+    }
+
+    /// Hands over everything received since the last call and the channels in
+    /// effect, which is what the panel needs to render itself.
+    pub fn drain(&self) -> Value {
+        let notices: Vec<Notice> = self.queue.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect();
+        let channels: Vec<String> = self
+            .channels
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect();
+        json!({ "notices": notices, "channels": channels })
+    }
+}
+
+/// Sends a NOTIFY on the session's browsing connection rather than on the
+/// listener's own. Postgres hands a self-notification back inside the message
+/// exchange of the very query that sent it, where the listener's driver never
+/// sees it; and in real use whatever notifies is a different session anyway.
+pub async fn notify(s: &PgSession, channel: &str, payload: &str) -> AppResult<()> {
+    let name = valid_channel(channel)?;
+    // pg_notify takes the channel as a parameter, so there is no quoting to get
+    // wrong and no way to inject through the name.
+    s.main
+        .client
+        .execute("SELECT pg_notify($1, $2)", &[&name, &payload])
+        .await?;
+    Ok(())
+}
+
+/// Channel names are identifiers, so they go through quote_ident; this only
+/// rejects what Postgres itself would, with a message worth reading.
+fn valid_channel(name: &str) -> AppResult<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::msg("Give the channel a name."));
+    }
+    if name.len() > 63 {
+        return Err(AppError::msg("A channel name is at most 63 characters."));
+    }
+    Ok(name.to_string())
 }

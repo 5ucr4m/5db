@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::error::{AppError, AppResult};
-use crate::pg::{self, PgSession};
+use crate::pg::{self, Listener, PgSession};
 use crate::rds::{self, RedisSession};
 use crate::ssh::{self, Tunnel};
 use crate::store::{ConnectionConfig, NewHistory, SavedQuery, Store};
@@ -48,6 +48,9 @@ pub struct AppState {
     pub store: Store,
     data_dir: PathBuf,
     pg: RwLock<HashMap<String, Arc<PgSession>>>,
+    /// One notification connection per (connection, database), opened lazily
+    /// the first time a channel is listened to.
+    listeners: RwLock<HashMap<String, Arc<Listener>>>,
     redis: RwLock<HashMap<String, Arc<RedisSession>>>,
     tunnels: Mutex<HashMap<String, Arc<Tunnel>>>,
     /// Serialises session creation so parallel first requests share one connect.
@@ -67,6 +70,7 @@ impl AppState {
             store,
             data_dir,
             pg: RwLock::new(HashMap::new()),
+            listeners: RwLock::new(HashMap::new()),
             redis: RwLock::new(HashMap::new()),
             tunnels: Mutex::new(HashMap::new()),
             connecting: Mutex::new(()),
@@ -88,6 +92,35 @@ impl AppState {
         let out = ssh::rewrite(&cfg, &t);
         tunnels.insert(cfg.id.clone(), t);
         Ok(out)
+    }
+
+    /// The listener for a session, opened on first use. Keyed like the session
+    /// itself, so switching database gets its own.
+    async fn listener(&self, connection_id: &str, database: Option<&str>) -> AppResult<Arc<Listener>> {
+        let session = self.pg(connection_id, database).await?;
+        let key = format!("{}/{}", session.cfg.id, session.database);
+        if let Some(l) = self.listeners.read().await.get(&key)
+            && !l.is_closed()
+        {
+            return Ok(l.clone());
+        }
+        let cfg = self.effective(self.store.get_connection(connection_id)?).await?;
+        let listener = Listener::open(&cfg, &session.database).await?;
+        self.listeners.write().await.insert(key, listener.clone());
+        Ok(listener)
+    }
+
+    /// The listener if there already is one. Polling must not open a connection
+    /// just because a panel is on screen.
+    async fn peek_listener(&self, connection_id: &str, database: Option<&str>) -> Option<Arc<Listener>> {
+        let session = self.pg(connection_id, database).await.ok()?;
+        let key = format!("{}/{}", session.cfg.id, session.database);
+        self.listeners
+            .read()
+            .await
+            .get(&key)
+            .cloned()
+            .filter(|l| !l.is_closed())
     }
 
     async fn pg(&self, connection_id: &str, database: Option<&str>) -> AppResult<Arc<PgSession>> {
@@ -141,6 +174,12 @@ impl AppState {
         let prefix = format!("{connection_id}\u{0}");
         self.pg.write().await.retain(|k, _| !k.starts_with(&prefix));
         self.redis.write().await.retain(|k, _| !k.starts_with(&prefix));
+        // Listeners are keyed by id and database, so a slash rather than a NUL.
+        let listen_prefix = format!("{connection_id}/");
+        self.listeners
+            .write()
+            .await
+            .retain(|k, _| !k.starts_with(&listen_prefix));
         self.tunnels.lock().await.remove(connection_id);
     }
 }
@@ -330,6 +369,40 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
                 &target.to_string_lossy(),
             )
             .await
+        }
+
+        "pg.listen" => {
+            let t: PgTarget = p(&params)?;
+            let channel: String = p(&params["channel"])?;
+            let l = state.listener(&t.connection_id, t.database.as_deref()).await?;
+            l.listen(&channel).await?;
+            Ok(l.drain())
+        }
+        "pg.unlisten" => {
+            let t: PgTarget = p(&params)?;
+            let channel: String = p(&params["channel"])?;
+            let l = state.listener(&t.connection_id, t.database.as_deref()).await?;
+            l.unlisten(&channel).await?;
+            Ok(l.drain())
+        }
+        "pg.notify" => {
+            let t: PgTarget = p(&params)?;
+            let channel: String = p(&params["channel"])?;
+            let payload: String = params["payload"].as_str().unwrap_or_default().to_string();
+            let session = state.pg(&t.connection_id, t.database.as_deref()).await?;
+            pg::notify(&session, &channel, &payload).await?;
+            // Not drained here: the notification is still in flight, and the
+            // panel's next poll is what picks it up.
+            Ok(Value::Null)
+        }
+        "pg.notifications" => {
+            let t: PgTarget = p(&params)?;
+            // Polled while the panel is open, so an absent listener is not an
+            // error: it just means nothing has been listened to yet.
+            match state.peek_listener(&t.connection_id, t.database.as_deref()).await {
+                Some(l) => Ok(l.drain()),
+                None => Ok(json!({ "notices": [], "channels": [] })),
+            }
         }
 
         // ---- redis -----------------------------------------------------

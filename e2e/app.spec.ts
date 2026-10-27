@@ -300,6 +300,70 @@ test("the query plan renders as a tree, with and without ANALYZE", async ({ page
   await expect(page.getByText("Estimates only.")).toHaveCount(0);
 });
 
+test("notifications: listen on a channel and see a NOTIFY arrive", async ({ page }) => {
+  await addConnection(page, PG_URL, "Shop");
+  await page.keyboard.press("Meta+k");
+  await page.getByPlaceholder(/Jump to a table/).fill("notifications");
+  await page.getByText("Notifications (LISTEN / NOTIFY)").click();
+  await expect(page.getByText("Not listening on any channel.")).toBeVisible();
+
+  await page.getByPlaceholder("channel to listen on").fill("e2e_orders");
+  await page.getByRole("button", { name: "Listen" }).click();
+  await expect(page.getByText("Not listening on any channel.")).toHaveCount(0);
+
+  // The sender goes out on another connection, which is how a real NOTIFY
+  // reaches the listener.
+  await page.getByPlaceholder("payload (optional)").fill('{"id":42}');
+  await page.getByRole("button", { name: "Notify" }).click();
+  await expect(page.getByText('"id": 42')).toBeVisible();
+  await expect(page.getByText(/pid \d+/)).toBeVisible();
+
+  // Stopping the channel empties the list again.
+  await page.getByRole("button", { name: "Stop listening on e2e_orders" }).click();
+  await expect(page.getByText("Not listening on any channel.")).toBeVisible();
+});
+
+test("connections are grouped in the list", async ({ page }) => {
+  // Seeded directly: this is about how the list renders groups, not about the
+  // form, which the first test already covers.
+  await rpc("connections.save", {
+    name: "Shop prod",
+    kind: "postgres",
+    group: "Commerce",
+    host: "127.0.0.1",
+    port: 54329,
+    user: "fivedb",
+    password: "fivedb",
+    database: "shop",
+    sslMode: "disable",
+  });
+  await rpc("connections.save", {
+    name: "Analytics",
+    kind: "postgres",
+    group: "Reporting",
+    host: "127.0.0.1",
+    port: 54329,
+    user: "fivedb",
+    password: "fivedb",
+    database: "shop",
+    sslMode: "disable",
+  });
+  await rpc("connections.save", { name: "Cache", kind: "redis", host: "127.0.0.1", port: 63799, password: "fivedb" });
+  await page.reload();
+
+  // Groups alphabetical, the ungrouped ones last under their own heading.
+  await expect(page.getByRole("heading", { name: "Commerce" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Reporting" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Ungrouped" })).toBeVisible();
+  await expect(page.getByText("Shop prod")).toBeVisible();
+  await expect(page.getByText("Cache")).toBeVisible();
+
+  // Searching by group name finds its connections.
+  await page.getByPlaceholder("Find a connection").fill("Reporting");
+  await expect(page.getByText("Analytics")).toBeVisible();
+  await expect(page.getByText("Shop prod")).toHaveCount(0);
+});
+
 test("cancel a long running query", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
   await page.keyboard.press("Meta+t");

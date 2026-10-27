@@ -18,6 +18,20 @@ export function ConnectionForm({ open, initial, onClose }: { open: boolean; init
   const [showPw, setShowPw] = useState(false);
   const [test, setTest] = useState<TestState>({ status: "idle" });
   const [saving, setSaving] = useState(false);
+  // Offered as suggestions so a group is reused rather than retyped slightly
+  // differently, without forcing the list to be managed anywhere.
+  const existingGroups = useMemo(
+    () =>
+      [
+        ...new Set(
+          useApp
+            .getState()
+            .connections.map((x) => x.group.trim())
+            .filter(Boolean),
+        ),
+      ].sort(),
+    [],
+  );
   // Only the modes that actually check the certificate can use a custom CA.
   const needsRootCert = c.kind === "postgres" ? c.sslMode === "verify-ca" || c.sslMode === "verify-full" : c.tls && !c.tlsInsecure;
 
@@ -218,6 +232,14 @@ export function ConnectionForm({ open, initial, onClose }: { open: boolean; init
           </Field>
           <Field label="Environment">
             <Segmented size="md" value={c.env} onChange={(v) => set("env", v)} options={envOptions} />
+          </Field>
+          <Field label="Group" className="col-span-2" hint="Folders the connection list. Leave it empty to keep the connection out of one.">
+            <Input list="5db-groups" value={c.group} placeholder="Shop, Analytics…" onChange={(e) => set("group", e.target.value)} />
+            <datalist id="5db-groups">
+              {existingGroups.map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
           </Field>
         </div>
 

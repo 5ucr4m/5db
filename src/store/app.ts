@@ -18,6 +18,7 @@ export type Tab =
   | { id: string; kind: "query"; title: string; sql?: string; savedId?: string; autorun?: boolean }
   | { id: string; kind: "function"; title: string; schema: string; name: string; oid: number; preview?: boolean }
   | { id: string; kind: "activity"; title: string }
+  | { id: string; kind: "listen"; title: string }
   | { id: string; kind: "history"; title: string }
   | { id: string; kind: "redis-key"; title: string; key: string; preview?: boolean }
   | { id: string; kind: "redis-console"; title: string }
@@ -129,6 +130,7 @@ function tabKey(t: TabInput | Tab): string | null {
     case "redis-key":
       return `key:${t.key}`;
     case "activity":
+    case "listen":
     case "history":
     case "redis-console":
     case "redis-info":

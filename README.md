@@ -15,6 +15,7 @@ A desktop client for **PostgreSQL** and **Redis** in the spirit of Postico, buil
 - A **statement timeout** per connection: the server cancels anything slower. Zero leaves it unlimited.
 - An **SSH tunnel** with a password or a private key (passphrase supported).
 - Many connections open at once, switched from the side rail.
+- **Groups**: a free-text folder per connection. The home screen groups by it, the rail draws a rule between groups, and search matches the group name.
 
 **PostgreSQL**
 - A browser for schemas, tables, views, materialized views, foreign tables and functions, with search and a row estimate. Switch database.
@@ -29,6 +30,7 @@ A desktop client for **PostgreSQL** and **Redis** in the spirit of Postico, buil
 - Export as CSV, JSON, Markdown and `INSERT`; export a whole table through `COPY`.
 - Truncate, drop and refresh a materialized view.
 - **Server activity** (`pg_stat_activity`) with cancel and terminate for backends.
+- **`LISTEN`/`NOTIFY`**: subscribe to channels and watch payloads arrive, formatted when they are JSON, with the sender's backend pid. A sender is built in for trying one out.
 
 **SQL editor**
 - CodeMirror with the PostgreSQL dialect and autocomplete for tables and columns.

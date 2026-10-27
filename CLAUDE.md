@@ -40,10 +40,18 @@ conversion. The type information comes separately from the catalog and drives
 filters, editing and colours (`src/lib/format.ts::typeFamily`). Never add a
 typed deserialization path for cell values.
 
-**Three Postgres connections per session.** `PgSession` holds `main`
-(browsing), `editor` (ad-hoc SQL, so a transaction left open cannot block
-navigation) and `writer` (staged edits, applied in one transaction). They are
-separate on purpose; do not collapse them.
+**Three Postgres connections per session, plus a listener.** `PgSession` holds
+`main` (browsing), `editor` (ad-hoc SQL, so a transaction left open cannot
+block navigation) and `writer` (staged edits, applied in one transaction). They
+are separate on purpose; do not collapse them. Notifications need a fourth,
+opened lazily, because the others discard their async messages — only
+`Connection::poll_message` surfaces a `NOTIFY`, and awaiting the connection,
+which every other client here does, drops it.
+
+**A NOTIFY never goes out on the listener's own connection.** Postgres hands a
+self-notification back inside the message exchange of the query that sent it,
+where the listener's driver never sees it. `pg::notify` uses the browsing
+connection for that reason.
 
 **Edits are staged, then atomic.** The grid accumulates pending changes in the
 frontend; `pg.apply` sends them all and runs them in a single transaction,

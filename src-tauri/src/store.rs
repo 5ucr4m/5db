@@ -18,6 +18,8 @@ pub struct ConnectionConfig {
     /// "postgres" | "redis"
     pub kind: String,
     pub color: String,
+    /// Free-text folder in the connection list. Empty means ungrouped.
+    pub group: String,
     /// "local" | "dev" | "staging" | "prod"
     pub env: String,
     pub host: String,

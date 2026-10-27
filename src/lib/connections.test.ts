@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blankConnection, connectionSummary, monogram, parseConnectionUrl } from "./connections";
+import { blankConnection, byGroup, connectionSummary, monogram, parseConnectionUrl } from "./connections";
 
 describe("parseConnectionUrl — postgres", () => {
   it("reads every part of a full URL", () => {
@@ -137,5 +137,29 @@ describe("monogram", () => {
     expect(monogram("")).toBe("?");
     expect(monogram("   ")).toBe("?");
     expect(monogram("__")).toBe("?");
+  });
+});
+
+describe("byGroup", () => {
+  const c = (name: string, group?: string) => ({ name, group });
+
+  it("keeps groups alphabetical and leaves the ungrouped ones last", () => {
+    const out = byGroup([c("a", "Work"), c("b"), c("c", "Analytics"), c("d", "Work")]);
+    expect(out.map((g) => g.group)).toEqual(["Analytics", "Work", ""]);
+    expect(out[1].items.map((i) => i.name)).toEqual(["a", "d"]);
+    expect(out[2].items.map((i) => i.name)).toEqual(["b"]);
+  });
+
+  it("treats whitespace and a missing group as the same thing", () => {
+    expect(byGroup([c("a", "  "), c("b"), c("c", "")]).map((g) => g.group)).toEqual([""]);
+  });
+
+  it("preserves the order within a group, which is the user's own ordering", () => {
+    const out = byGroup([c("z", "G"), c("a", "G")]);
+    expect(out[0].items.map((i) => i.name)).toEqual(["z", "a"]);
+  });
+
+  it("returns nothing for an empty list", () => {
+    expect(byGroup([])).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 import { Copy, Database, MoreHorizontal, Pencil, Plus, Search, Trash2, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, cx, Input, Kbd, MenuItem, MenuSeparator, Popover, Spinner } from "../../components/ui";
-import { connectionSummary, ENV_META, monogram } from "../../lib/connections";
+import { byGroup, connectionSummary, ENV_META, monogram } from "../../lib/connections";
 import { relativeTime } from "../../lib/format";
 import { errorMessage } from "../../lib/rpc";
 import type { ConnectionConfig } from "../../lib/types";
@@ -20,8 +20,9 @@ export function Home() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return connections;
-    return connections.filter((c) => `${c.name} ${c.host} ${c.database} ${c.env} ${c.kind}`.toLowerCase().includes(q));
+    return connections.filter((c) => `${c.name} ${c.group} ${c.host} ${c.database} ${c.env} ${c.kind}`.toLowerCase().includes(q));
   }, [connections, query]);
+  const groups = useMemo(() => byGroup(filtered), [filtered]);
 
   const recent = useMemo(
     () =>
@@ -100,28 +101,36 @@ export function Home() {
                 </div>
               </section>
             )}
-            <h2 className="mb-3 text-2xs font-semibold tracking-[0.14em] text-faint uppercase">All connections</h2>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3">
-              {filtered.map((c) => (
-                <ConnectionCard
-                  key={c.id}
-                  c={c}
-                  connected={sessions.some((s) => s.connectionId === c.id && s.status === "ready")}
-                  connecting={sessions.some((s) => s.connectionId === c.id && s.status === "connecting")}
-                  onOpen={() => openSession(c.id)}
-                  onEdit={() => openForm(c)}
-                  onDuplicate={() => openForm({ ...c, id: "", name: `${c.name} copy`, createdAt: undefined, lastUsedAt: undefined })}
-                />
-              ))}
-              <button
-                type="button"
-                onClick={() => openForm(null)}
-                className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-iris hover:text-iris"
-              >
-                <Plus className="size-5" />
-                Add connection
-              </button>
-            </div>
+            {groups.map(({ group, items }, gi) => (
+              <section key={group || "__ungrouped"} className={gi ? "mt-7" : undefined}>
+                <h2 className="mb-3 text-2xs font-semibold tracking-[0.14em] text-faint uppercase">
+                  {group || (groups.length > 1 ? "Ungrouped" : "All connections")}
+                </h2>
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3">
+                  {items.map((c) => (
+                    <ConnectionCard
+                      key={c.id}
+                      c={c}
+                      connected={sessions.some((s) => s.connectionId === c.id && s.status === "ready")}
+                      connecting={sessions.some((s) => s.connectionId === c.id && s.status === "connecting")}
+                      onOpen={() => openSession(c.id)}
+                      onEdit={() => openForm(c)}
+                      onDuplicate={() => openForm({ ...c, id: "", name: `${c.name} copy`, createdAt: undefined, lastUsedAt: undefined })}
+                    />
+                  ))}
+                  {gi === groups.length - 1 && (
+                    <button
+                      type="button"
+                      onClick={() => openForm(null)}
+                      className="flex min-h-[132px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-iris hover:text-iris"
+                    >
+                      <Plus className="size-5" />
+                      Add connection
+                    </button>
+                  )}
+                </div>
+              </section>
+            ))}
             {filtered.length === 0 && <p className="mt-6 text-sm text-muted">No connection matches “{query}”.</p>}
           </>
         )}

@@ -11,6 +11,10 @@ All notable changes to 5db. The format follows
 - Connection secrets are kept in the OS keychain instead of the SQLite file.
   Existing connections are migrated on first launch, and a machine without a
   keychain keeps the previous behaviour and says so.
+- `LISTEN`/`NOTIFY`: a panel that subscribes to channels and shows the payloads
+  as they arrive, with a sender for trying one.
+- Groups for connections, with the home screen and the side rail laid out by
+  them and search matching the group name.
 - A query plan viewer: `EXPLAIN (FORMAT JSON)` rendered as a tree with per-node
   self time, the slowest node highlighted and bad row estimates flagged.
 - The open connections, tabs and window geometry are restored on launch.

@@ -15,6 +15,7 @@ export function blankConnection(kind: ConnectionKind = "postgres"): ConnectionCo
     name: "",
     kind,
     color: CONNECTION_COLORS[0],
+    group: "",
     env: "local",
     host: "localhost",
     port: kind === "postgres" ? 5432 : 6379,
@@ -97,4 +98,21 @@ export function monogram(name: string): string {
     .filter(Boolean);
   if (!words.length) return "?";
   return (words.length > 1 ? words[0][0] + words[1][0] : words[0].slice(0, 2)).toUpperCase();
+}
+
+/**
+ * The connections split into groups, ungrouped last, each group's own order
+ * preserved. Used by the home screen and the side rail so both agree.
+ */
+export function byGroup<T extends { group?: string }>(connections: T[]): { group: string; items: T[] }[] {
+  const groups = new Map<string, T[]>();
+  for (const c of connections) {
+    const key = (c.group ?? "").trim();
+    const list = groups.get(key);
+    if (list) list.push(c);
+    else groups.set(key, [c]);
+  }
+  return [...groups.entries()]
+    .map(([group, items]) => ({ group, items }))
+    .sort((a, b) => (a.group === "" ? 1 : b.group === "" ? -1 : a.group.localeCompare(b.group)));
 }

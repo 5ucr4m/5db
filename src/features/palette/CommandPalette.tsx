@@ -1,5 +1,6 @@
 import {
   Activity,
+  Antenna,
   Bookmark,
   Clock,
   Database,
@@ -115,6 +116,14 @@ export function CommandPalette() {
         icon: <Activity className="size-4" />,
         run: () => st.openTab(sid, { kind: "activity", title: "Activity" }),
       });
+      out.push({
+        id: "listen",
+        label: "Notifications (LISTEN / NOTIFY)",
+        hint: "watch a channel",
+        group: "Actions",
+        icon: <Antenna className="size-4" />,
+        run: () => st.openTab(sid, { kind: "listen", title: "Notifications" }),
+      });
       for (const o of session.objects?.objects ?? []) {
         const Icon = o.kind === "view" ? Eye : o.kind === "matview" ? Layers : Table2;
         out.push({
@@ -172,7 +181,7 @@ export function CommandPalette() {
       out.push({
         id: `c:${c.id}`,
         label: c.name,
-        hint: c.env,
+        hint: c.group ? `${c.group} · ${c.env}` : c.env,
         group: "Connections",
         icon: c.kind === "postgres" ? <Database className="size-4" /> : <Zap className="size-4" />,
         run: () => void st.openSession(c.id),
