@@ -1,6 +1,6 @@
 #!/bin/sh
 # Populates the test Redis with every value type 5db renders.
-cd "$(dirname "$0")/.." && R="docker compose exec -T redis redis-cli -a fivedb --no-auth-warning"
+cd "$(dirname "$0")" && R="docker compose exec -T redis redis-cli -a fivedb --no-auth-warning"
 {
   echo "DEL queue:emails events:orders tags:popular leaderboard"
   for i in $(seq 1 300); do echo "SET session:user:$i token-$i-abc EX $((86400 + i * 60))"; done

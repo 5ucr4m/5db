@@ -16,8 +16,11 @@ services:
       POSTGRES_DB: shop
     ports:
       - "54329:5432"
+    # The single SQL file, not the directory: anything else in there would be
+    # run by the entrypoint too, and a script meant for another service exits
+    # the container during initdb.
     volumes:
-      - ./seed:/docker-entrypoint-initdb.d:ro
+      - ./seed/01-shop.sql:/docker-entrypoint-initdb.d/01-shop.sql:ro
     # pg_isready alone passes against the temporary server the entrypoint runs
     # while the seed is still loading, and the container then restarts. Querying
     # a seeded table only succeeds once the real server is up with data.
