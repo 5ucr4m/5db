@@ -8,12 +8,14 @@ import { useApp } from "./store/app";
 
 export default function App() {
   const loadConnections = useApp((s) => s.loadConnections);
+  const restoreWorkspace = useApp((s) => s.restoreWorkspace);
   const sessions = useApp((s) => s.sessions);
   const activeId = useApp((s) => s.activeSessionId);
 
+  // The workspace is restored after the connections, which it refers to by id.
   useEffect(() => {
-    void loadConnections();
-  }, [loadConnections]);
+    void loadConnections().then(restoreWorkspace);
+  }, [loadConnections, restoreWorkspace]);
 
   // Block the webview's own reload/find shortcuts; the app gives them meaning.
   useEffect(() => {

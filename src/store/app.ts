@@ -71,12 +71,15 @@ interface AppStore {
   connectionsLoaded: boolean;
   sessions: Session[];
   activeSessionId: string | null;
+  /** False until the saved workspace has been read, so nothing overwrites it. */
+  workspaceRestored: boolean;
   toasts: Toast[];
   confirmRequest: ConfirmRequest | null;
   paletteOpen: boolean;
   theme: Theme;
 
   loadConnections(): Promise<void>;
+  restoreWorkspace(): Promise<void>;
   saveConnection(c: ConnectionConfig): Promise<ConnectionConfig>;
   deleteConnection(id: string): Promise<void>;
   reorderConnections(ids: string[]): Promise<void>;
@@ -104,6 +107,18 @@ interface AppStore {
 }
 
 export const sessionFor = (sessions: Session[], id: string | null) => sessions.find((s) => s.id === id);
+
+const WORKSPACE_KEY = "workspace";
+
+/**
+ * What gets remembered between runs. Session ids are generated per run, so
+ * connections are the key; a connection that no longer exists is skipped.
+ */
+interface PersistedWorkspace {
+  version: 1;
+  activeConnectionId: string | null;
+  sessions: { connectionId: string; database: string; tabs: Tab[]; activeTabId: string | null }[];
+}
 
 function tabKey(t: TabInput | Tab): string | null {
   switch (t.kind) {
@@ -162,6 +177,7 @@ export const useApp = create<AppStore>((set, get) => {
     connectionsLoaded: false,
     sessions: [],
     activeSessionId: null,
+    workspaceRestored: false,
     toasts: [],
     confirmRequest: null,
     paletteOpen: false,
@@ -182,6 +198,40 @@ export const useApp = create<AppStore>((set, get) => {
         set({ connectionsLoaded: true });
         get().toast("error", errorMessage(e));
       }
+    },
+    /** Reopens the connections and tabs that were open when the app last closed. */
+    async restoreWorkspace() {
+      let saved: PersistedWorkspace | null = null;
+      try {
+        saved = await rpc<PersistedWorkspace | null>("settings.get", { key: WORKSPACE_KEY });
+      } catch {
+        // A workspace that cannot be read is not worth blocking startup over.
+      }
+      const known = new Map(get().connections.map((c) => [c.id, c]));
+      const sessions: Session[] = [];
+      for (const p of saved?.version === 1 ? saved.sessions : []) {
+        const conn = known.get(p.connectionId);
+        if (!conn) continue;
+        // Never re-run a query on startup, however the tab was left.
+        const tabs = p.tabs.map((t) => (t.kind === "query" ? { ...t, autorun: false } : t));
+        sessions.push({
+          id: uid(),
+          connectionId: conn.id,
+          kind: conn.kind,
+          database: p.database,
+          status: "connecting",
+          tabs,
+          activeTabId: tabs.some((t) => t.id === p.activeTabId) ? p.activeTabId : (tabs[0]?.id ?? null),
+          keysVersion: 0,
+        });
+      }
+      if (!sessions.length) {
+        set({ workspaceRestored: true });
+        return;
+      }
+      const active = sessions.find((s) => s.connectionId === saved?.activeConnectionId) ?? sessions[0];
+      set({ sessions, activeSessionId: active.id, workspaceRestored: true });
+      await Promise.all(sessions.map(connectSession));
     },
     async saveConnection(c) {
       const saved = await rpc<ConnectionConfig>("connections.save", c as unknown as Record<string, unknown>);
@@ -378,3 +428,44 @@ export function useActiveSession(): Session | undefined {
 export function useConnection(id: string | undefined): ConnectionConfig | undefined {
   return useApp((st) => st.connections.find((c) => c.id === id));
 }
+
+// Opening a session or a tab is written straight away, so killing the app a
+// moment later still remembers it. Editor text, which changes on every
+// keystroke, is debounced instead.
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let lastSaved = "";
+let lastShape = "";
+
+const writeWorkspace = (payload: PersistedWorkspace) => {
+  void rpc("settings.set", { key: WORKSPACE_KEY, value: payload }).catch(() => {});
+};
+
+useApp.subscribe((st) => {
+  if (!st.workspaceRestored) return;
+  const payload: PersistedWorkspace = {
+    version: 1,
+    activeConnectionId: st.sessions.find((s) => s.id === st.activeSessionId)?.connectionId ?? null,
+    sessions: st.sessions.map((s) => ({
+      connectionId: s.connectionId,
+      database: s.database,
+      tabs: s.tabs,
+      activeTabId: s.activeTabId,
+    })),
+  };
+  const json = JSON.stringify(payload);
+  if (json === lastSaved) return;
+  lastSaved = json;
+
+  // Which connections and tabs exist, as opposed to what is inside them.
+  const shape = JSON.stringify([
+    payload.activeConnectionId,
+    payload.sessions.map((s) => [s.connectionId, s.database, s.activeTabId, s.tabs.map((t) => [t.id, t.kind])]),
+  ]);
+  clearTimeout(saveTimer);
+  if (shape !== lastShape) {
+    lastShape = shape;
+    writeWorkspace(payload);
+    return;
+  }
+  saveTimer = setTimeout(() => writeWorkspace(payload), 500);
+});

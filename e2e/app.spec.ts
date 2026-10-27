@@ -88,10 +88,34 @@ test("first run, connection test and persistence", async ({ page }) => {
   await expect(page.getByText("shop", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: /customers/ }).first()).toBeVisible();
 
-  // Saved: reload the app and the connection is still there.
+  // Saved: reload the app and the connection is still there, reopened where
+  // it was left rather than back on the home screen.
   await page.reload();
-  await expect(page.getByText("Shop local").first()).toBeVisible();
-  await expect(page.getByText("Jump back in")).toBeVisible();
+  // The name also exists on the hidden home screen, so look in the sidebar.
+  await expect(page.locator("aside").getByText("Shop local", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /customers/ }).first()).toBeVisible();
+});
+
+test("the open tabs come back after a restart", async ({ page }) => {
+  await addConnection(page, PG_URL, "Shop");
+  await page.getByRole("button", { name: /^customers/ }).dblclick();
+  await expect(page.getByText("1–500 of 5,000")).toBeVisible();
+
+  // A query tab with text in it, which has to come back unexecuted.
+  await page.keyboard.press("Meta+t");
+  const editor = page.locator(".cm-content");
+  await editor.click();
+  await page.keyboard.type("SELECT 42 AS answer");
+  await expect(editor).toContainText("SELECT 42");
+
+  // Only the editor text is debounced, so give that snapshot time to land.
+  await page.waitForTimeout(900);
+  await page.reload();
+
+  // Both tabs are back, the query text with them, and nothing ran on its own.
+  await expect(page.getByRole("button", { name: /customers/ }).first()).toBeVisible();
+  await expect(page.locator(".cm-content")).toContainText("SELECT 42");
+  await expect(page.getByText("Run a query to see results")).toBeVisible();
 });
 
 test("browse, sort, search, filter and paginate a table", async ({ page }) => {
