@@ -2,6 +2,10 @@ import { expect, type Page, test } from "@playwright/test";
 
 // End-to-end flows against the docker fixtures (`pnpm db:up`).
 // Tests share one bridge, so each starts from an empty connection list.
+//
+// Shortcuts use ControlOrMeta, never Meta: CodeMirror binds `Mod-`, which is
+// Cmd on macOS and Ctrl everywhere else, so a hard-coded Meta silently does
+// nothing on the Linux runner.
 
 const BRIDGE = "http://127.0.0.1:1430/rpc";
 const PG_URL = "postgres://fivedb:fivedb@127.0.0.1:54329/shop?sslmode=disable";
@@ -102,7 +106,7 @@ test("the open tabs come back after a restart", async ({ page }) => {
   await expect(page.getByText("1–500 of 5,000")).toBeVisible();
 
   // A query tab with text in it, which has to come back unexecuted.
-  await page.keyboard.press("Meta+t");
+  await page.keyboard.press("ControlOrMeta+t");
   const editor = page.locator(".cm-content");
   await editor.click();
   await page.keyboard.type("SELECT 42 AS answer");
@@ -178,7 +182,7 @@ test("edit cells, insert and delete rows in one transaction", async ({ page }) =
   await page.getByRole("button", { name: "Review SQL" }).click();
   await expect(page.getByText(/UPDATE "public"."customers" SET "name" = 'Bruno Edited' WHERE "id" = '1'/)).toBeVisible();
   await page.getByRole("dialog").getByText("Close", { exact: true }).click();
-  await page.keyboard.press("Meta+s");
+  await page.keyboard.press("ControlOrMeta+s");
   await expect(page.getByText("Saved 1 change to customers")).toBeVisible();
   await expect(grid(page).getByText("Bruno Edited")).toBeVisible();
 
@@ -207,7 +211,7 @@ test("edit cells, insert and delete rows in one transaction", async ({ page }) =
   await price.dblclick();
   await page.locator("main input.h-\\[28px\\]").fill("-5");
   await page.keyboard.press("Enter");
-  await page.keyboard.press("Meta+s");
+  await page.keyboard.press("ControlOrMeta+s");
   await expect(page.getByText(/Change #1 failed: .*check constraint/)).toBeVisible();
   await page.getByRole("button", { name: "Discard" }).click();
 
@@ -232,26 +236,26 @@ test("foreign key navigation opens the referenced row", async ({ page }) => {
 
 test("SQL editor: run, errors, multiple results, history and saved queries", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
-  await page.keyboard.press("Meta+t");
+  await page.keyboard.press("ControlOrMeta+t");
   const editor = page.locator(".cm-content").first();
   await editor.click();
   await page.keyboard.type("SELECT status, count(*) AS n FROM orders GROUP BY 1 ORDER BY 1;");
-  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("ControlOrMeta+Enter");
   await expect(page.getByRole("button", { name: "5 rows" })).toBeVisible();
   await expect(page.getByText("delivered").first()).toBeVisible();
 
   // Error with position.
-  await page.keyboard.press("Meta+a");
+  await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.type("SELECT * FROM nope_table");
-  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("ControlOrMeta+Enter");
   await expect(page.getByText('relation "nope_table" does not exist').first()).toBeVisible();
   await expect(page.getByText("SQLSTATE 42P01")).toBeVisible();
   await expect(page.locator(".cm-error-mark")).toHaveText("nope_table");
 
   // Several statements: command + rows.
-  await page.keyboard.press("Meta+a");
+  await page.keyboard.press("ControlOrMeta+a");
   await page.keyboard.type("CREATE TEMP TABLE e2e(x int); INSERT INTO e2e VALUES (1),(2); SELECT sum(x) FROM e2e;");
-  await page.keyboard.press("Meta+Shift+Enter");
+  await page.keyboard.press("ControlOrMeta+Shift+Enter");
   await expect(page.getByRole("button", { name: "2 affected" })).toBeVisible();
   await expect(page.getByRole("button", { name: "1 row" })).toBeVisible();
 
@@ -262,14 +266,14 @@ test("SQL editor: run, errors, multiple results, history and saved queries", asy
   await expect(editor).toContainText("GROUP BY 1 ORDER BY 1");
 
   // Save it with a name, then find it in Saved and in the palette.
-  await page.keyboard.press("Meta+s");
+  await page.keyboard.press("ControlOrMeta+s");
   await page.getByPlaceholder("Monthly revenue by status").fill("Orders by status");
   await page.getByRole("button", { name: "Save query" }).click();
   await expect(page.getByText("Saved “Orders by status”")).toBeVisible();
   await page.getByRole("button", { name: /Saved · 1/ }).click();
   await expect(page.getByText("Orders by status").last()).toBeVisible();
 
-  await page.keyboard.press("Meta+k");
+  await page.keyboard.press("ControlOrMeta+k");
   await page.getByPlaceholder(/Jump to a table/).fill("orders by");
   await expect(page.getByRole("button", { name: "Orders by status", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
@@ -282,7 +286,7 @@ test("SQL editor: run, errors, multiple results, history and saved queries", asy
 
 test("the query plan renders as a tree, with and without ANALYZE", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
-  await page.keyboard.press("Meta+t");
+  await page.keyboard.press("ControlOrMeta+t");
   await page.locator(".cm-content").click();
   await page.keyboard.type("SELECT c.name, count(*) FROM customers c JOIN orders o ON o.customer_id = c.id GROUP BY 1");
 
@@ -302,7 +306,7 @@ test("the query plan renders as a tree, with and without ANALYZE", async ({ page
 
 test("notifications: listen on a channel and see a NOTIFY arrive", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
-  await page.keyboard.press("Meta+k");
+  await page.keyboard.press("ControlOrMeta+k");
   await page.getByPlaceholder(/Jump to a table/).fill("notifications");
   await page.getByText("Notifications (LISTEN / NOTIFY)").click();
   await expect(page.getByText("Not listening on any channel.")).toBeVisible();
@@ -366,10 +370,10 @@ test("connections are grouped in the list", async ({ page }) => {
 
 test("cancel a long running query", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
-  await page.keyboard.press("Meta+t");
+  await page.keyboard.press("ControlOrMeta+t");
   await page.locator(".cm-content").first().click();
   await page.keyboard.type("SELECT pg_sleep(20)");
-  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("ControlOrMeta+Enter");
   await expect(page.getByText(/Running ·/)).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByText("canceling statement due to user request").first()).toBeVisible();
@@ -378,10 +382,10 @@ test("cancel a long running query", async ({ page }) => {
 test("production connections confirm destructive statements", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop prod", "Production");
   await expect(page.locator("div.h-\\[3px\\].env-stripe-prod")).toBeVisible();
-  await page.keyboard.press("Meta+t");
+  await page.keyboard.press("ControlOrMeta+t");
   await page.locator(".cm-content").first().click();
   await page.keyboard.type("DELETE FROM audit_log");
-  await page.keyboard.press("Meta+Enter");
+  await page.keyboard.press("ControlOrMeta+Enter");
   await expect(page.getByText("Run on production?")).toBeVisible();
   await expect(page.getByText(/deletes every row/)).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
