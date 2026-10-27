@@ -58,15 +58,19 @@ keyed by primary key or, when there is none, by `ctid`.
 | `src-tauri/src/rds.rs` | Redis: SCAN, typed reads, commands, INFO |
 | `src-tauri/src/ssh.rs` | SSH tunnels (russh) on an ephemeral local port |
 | `src-tauri/src/store.rs` | SQLite: connections, history, saved queries, settings |
+| `src-tauri/src/secrets.rs` | the keychain vault, with a file fallback |
 | `src/store/app.ts` | the Zustand store: sessions, tabs, toasts, confirmations |
 | `src/lib/` | pure logic, and the only code with unit tests |
 | `src/components/grid/DataGrid.tsx` | the hand-written virtualized grid |
 
 ## Things that will bite you
 
-- **Secrets.** `store.rs` holds connection passwords in plain text in SQLite
-  (mode `0600`). Never log a `ConnectionConfig` and never return one to a
-  context that did not already have it.
+- **Secrets.** Passwords, SSH passwords and passphrases go to the OS keychain
+  through `secrets.rs`; the SQLite row keeps those fields blank. Every write to
+  the `connections` table must go through `Store::write_row`, which is the only
+  thing that blanks them — going around it puts a plaintext secret on disk, and
+  `secrets_never_reach_the_database_file` will catch it. A `ConnectionConfig`
+  in memory does carry the real secrets, so never log one.
 - **TLS verifies by default.** Postgres `verify-ca`/`verify-full` and Redis TLS
   check the certificate. Skipping the check is an explicit per-connection flag;
   do not widen that default.

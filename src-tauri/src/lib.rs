@@ -2,6 +2,7 @@ pub mod error;
 pub mod pg;
 pub mod rds;
 pub mod rpc;
+pub mod secrets;
 pub mod ssh;
 pub mod store;
 
@@ -30,8 +31,7 @@ pub fn run() {
             // The updater is desktop-only, so it is registered here rather than
             // in the builder chain.
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             let dir = app.path().app_data_dir()?;
             let state = AppState::new(dir).map_err(|e| e.message)?;
             app.manage(Arc::new(state));

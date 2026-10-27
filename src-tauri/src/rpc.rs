@@ -56,7 +56,13 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(data_dir: PathBuf) -> AppResult<Self> {
-        let store = Store::open(&data_dir)?;
+        AppState::new_with(data_dir, crate::secrets::Vault::open())
+    }
+
+    /// Used by the tests, which choose the secret store explicitly rather than
+    /// through the environment, so running them in parallel cannot race.
+    pub fn new_with(data_dir: PathBuf, vault: crate::secrets::Vault) -> AppResult<Self> {
+        let store = Store::open_with(&data_dir, vault)?;
         Ok(AppState {
             store,
             data_dir,

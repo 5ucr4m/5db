@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
+use crate::secrets::{Backend, Vault};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -94,6 +95,7 @@ pub struct SavedQuery {
 
 pub struct Store {
     db: Mutex<Connection>,
+    vault: Vault,
 }
 
 fn now() -> String {
@@ -102,6 +104,10 @@ fn now() -> String {
 
 impl Store {
     pub fn open(dir: &Path) -> AppResult<Self> {
+        Store::open_with(dir, Vault::open())
+    }
+
+    pub fn open_with(dir: &Path, vault: Vault) -> AppResult<Self> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join("5db.sqlite3");
         let db = Connection::open(&path)?;
@@ -144,16 +150,45 @@ impl Store {
                value TEXT NOT NULL
              );",
         )?;
-        Ok(Store { db: Mutex::new(db) })
+        let store = Store {
+            db: Mutex::new(db),
+            vault,
+        };
+        store.migrate_secrets()?;
+        Ok(store)
     }
 
-    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.db.lock().unwrap_or_else(|e| e.into_inner())
+    /// Which store the connection secrets are in.
+    pub fn secrets_backend(&self) -> Backend {
+        self.vault.backend()
     }
 
-    // ---- connections -----------------------------------------------------
+    /// Moves any secret still sitting in the SQLite file into the keychain.
+    /// Runs once per upgrade; afterwards there is nothing left to move.
+    fn migrate_secrets(&self) -> AppResult<()> {
+        if self.vault.backend() != Backend::Keychain {
+            return Ok(());
+        }
+        let stale: Vec<ConnectionConfig> = self
+            .read_rows()?
+            .into_iter()
+            .filter(|c| self.vault.needs_migration(c))
+            .collect();
+        if stale.is_empty() {
+            return Ok(());
+        }
+        for c in &stale {
+            self.write_row(c)?;
+        }
+        eprintln!(
+            "5db: moved the secrets of {} connection(s) into the keychain.",
+            stale.len()
+        );
+        Ok(())
+    }
 
-    pub fn list_connections(&self) -> AppResult<Vec<ConnectionConfig>> {
+    /// The rows exactly as stored, secrets not filled in.
+    fn read_rows(&self) -> AppResult<Vec<ConnectionConfig>> {
         let db = self.conn();
         let mut stmt = db.prepare("SELECT data FROM connections ORDER BY position, rowid")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
@@ -166,13 +201,48 @@ impl Store {
         Ok(out)
     }
 
+    /// The single place a connection is written, so no path can leak a secret
+    /// into the file by going around the vault.
+    fn write_row(&self, c: &ConnectionConfig) -> AppResult<()> {
+        let row = self.vault.store(c);
+        let db = self.conn();
+        let position: i64 = db.query_row(
+            "SELECT COALESCE((SELECT position FROM connections WHERE id = ?1), (SELECT COALESCE(MAX(position), 0) + 1 FROM connections))",
+            [&c.id],
+            |r| r.get(0),
+        )?;
+        db.execute(
+            "INSERT INTO connections (id, position, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+            params![c.id, position, serde_json::to_string(&row)?],
+        )?;
+        Ok(())
+    }
+
+    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.db.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    // ---- connections -----------------------------------------------------
+
+    pub fn list_connections(&self) -> AppResult<Vec<ConnectionConfig>> {
+        let mut out = self.read_rows()?;
+        for c in &mut out {
+            self.vault.load(c);
+        }
+        Ok(out)
+    }
+
     pub fn get_connection(&self, id: &str) -> AppResult<ConnectionConfig> {
         let db = self.conn();
         let data: Option<String> = db
             .query_row("SELECT data FROM connections WHERE id = ?1", [id], |r| r.get(0))
             .optional()?;
         let data = data.ok_or_else(|| AppError::msg("This connection no longer exists. It may have been deleted."))?;
-        Ok(serde_json::from_str(&data)?)
+        drop(db);
+        let mut c: ConnectionConfig = serde_json::from_str(&data)?;
+        self.vault.load(&mut c);
+        Ok(c)
     }
 
     pub fn save_connection(&self, mut c: ConnectionConfig) -> AppResult<ConnectionConfig> {
@@ -184,31 +254,20 @@ impl Store {
             c.created_at = Some(ts.clone());
         }
         c.updated_at = Some(ts);
-        let db = self.conn();
-        let position: i64 = db.query_row("SELECT COALESCE(MAX(position), 0) + 1 FROM connections", [], |r| {
-            r.get(0)
-        })?;
-        db.execute(
-            "INSERT INTO connections (id, position, data) VALUES (?1, ?2, ?3)
-             ON CONFLICT(id) DO UPDATE SET data = excluded.data",
-            params![c.id, position, serde_json::to_string(&c)?],
-        )?;
+        self.write_row(&c)?;
         Ok(c)
     }
 
     pub fn touch_connection(&self, id: &str) -> AppResult<()> {
         if let Ok(mut c) = self.get_connection(id) {
             c.last_used_at = Some(now());
-            let db = self.conn();
-            db.execute(
-                "UPDATE connections SET data = ?2 WHERE id = ?1",
-                params![id, serde_json::to_string(&c)?],
-            )?;
+            self.write_row(&c)?;
         }
         Ok(())
     }
 
     pub fn delete_connection(&self, id: &str) -> AppResult<()> {
+        self.vault.forget(id);
         let db = self.conn();
         db.execute("DELETE FROM connections WHERE id = ?1", [id])?;
         db.execute("DELETE FROM history WHERE connection_id = ?1", [id])?;

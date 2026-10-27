@@ -8,6 +8,11 @@ All notable changes to 5db. The format follows
 
 ### Added
 
+- Connection secrets are kept in the OS keychain instead of the SQLite file.
+  Existing connections are migrated on first launch, and a machine without a
+  keychain keeps the previous behaviour and says so.
+- The open connections, tabs and window geometry are restored on launch.
+- Signed releases and an in-app update check.
 - PostgreSQL `verify-ca`, and a PEM bundle for a private certificate authority,
   so connections to RDS, Supabase, Cloud SQL and internal infrastructure can be
   verified instead of merely encrypted.

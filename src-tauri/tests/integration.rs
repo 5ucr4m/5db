@@ -2,11 +2,14 @@
 //! `docker/` (`docker compose -f docker/docker-compose.yml up -d`).
 
 use fivedb_lib::rpc::{AppState, dispatch};
+use fivedb_lib::secrets::{Backend, Vault};
 use serde_json::{Value, json};
 
 fn state() -> AppState {
+    // Keep the suite out of the developer's real keychain; the keychain path has
+    // its own test below, which cleans up after itself.
     let dir = std::env::temp_dir().join(format!("5db-test-{}", uuid_like()));
-    AppState::new(dir).expect("store")
+    AppState::new_with(dir, Vault::file()).expect("store")
 }
 
 fn uuid_like() -> String {
@@ -686,4 +689,76 @@ async fn pg_statement_timeout_is_enforced() {
     // A quick statement on the same connection is unaffected.
     let ok = call(&s, "pg.execute", json!({ "connectionId": id, "sql": "SELECT 1" })).await;
     assert_eq!(ok["results"][0]["rows"][0][0], "1");
+}
+
+#[tokio::test]
+async fn secrets_never_reach_the_database_file() {
+    let dir = std::env::temp_dir().join(format!("5db-vault-{}", uuid_like()));
+    let s = AppState::new_with(dir.clone(), Vault::open()).expect("store");
+    if s.store.secrets_backend() != Backend::Keychain {
+        // No keychain on this machine (CI): the fallback is covered by the unit
+        // tests, and there is nothing to assert about the file here.
+        return;
+    }
+
+    // Distinctive strings, so finding them in the file is unambiguous. They are
+    // not real credentials, which is fine: this half never connects.
+    const PASSWORD: &str = "pw-aardvark-72f1";
+    const SSH_PASSWORD: &str = "ssh-badger-9c3d";
+    const PASSPHRASE: &str = "pp-civet-41ab";
+
+    let saved = call(
+        &s,
+        "connections.save",
+        json!({ "name": "Vault", "kind": "postgres", "host": "127.0.0.1", "port": 54329, "user": "fivedb",
+                "password": PASSWORD, "database": "shop", "sslMode": "disable",
+                "sshPassword": SSH_PASSWORD, "sshPassphrase": PASSPHRASE }),
+    )
+    .await;
+    let bogus_id = saved["id"].as_str().unwrap().to_string();
+
+    // The caller still gets the real secrets back, so nothing downstream breaks.
+    assert_eq!(saved["password"], PASSWORD);
+    assert_eq!(saved["sshPassword"], SSH_PASSWORD);
+
+    // Reading them back goes through the keychain and returns the same values.
+    let list = call(&s, "connections.list", json!({})).await;
+    assert_eq!(
+        list[0]["password"], PASSWORD,
+        "the keychain must return what was stored"
+    );
+    assert_eq!(list[0]["sshPassphrase"], PASSPHRASE);
+
+    // Nothing in the database file, including the WAL, holds any of them.
+    let mut found = Vec::new();
+    for name in ["5db.sqlite3", "5db.sqlite3-wal", "5db.sqlite3-shm"] {
+        let Ok(bytes) = std::fs::read(dir.join(name)) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        for secret in [PASSWORD, SSH_PASSWORD, PASSPHRASE] {
+            if text.contains(secret) {
+                found.push(format!("{name} contains {secret}"));
+            }
+        }
+    }
+
+    // And a connection whose password really is the fixture's still connects,
+    // which proves the driver gets the value out of the keychain.
+    let real = call(
+        &s,
+        "connections.save",
+        json!({ "name": "Real", "kind": "postgres", "host": "127.0.0.1", "port": 54329, "user": "fivedb",
+                "password": "fivedb", "database": "shop", "sslMode": "disable" }),
+    )
+    .await;
+    let real_id = real["id"].as_str().unwrap().to_string();
+    let used = call(&s, "pg.execute", json!({ "connectionId": real_id, "sql": "SELECT 1" })).await;
+
+    call(&s, "connections.delete", json!({ "id": bogus_id })).await;
+    call(&s, "connections.delete", json!({ "id": real_id })).await;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(found.is_empty(), "plaintext secrets on disk: {found:?}");
+    assert_eq!(used["results"][0]["rows"][0][0], "1");
 }

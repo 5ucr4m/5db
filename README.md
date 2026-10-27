@@ -6,6 +6,7 @@ A desktop client for **PostgreSQL** and **Redis** in the spirit of Postico, buil
 
 **Connections**
 - Create, edit, duplicate and delete connections saved locally (SQLite in the app data directory, file mode `0600`).
+- Passwords, SSH passwords and key passphrases live in the **OS keychain** — Keychain on macOS, Credential Manager on Windows, Secret Service on Linux — not in the database file, which therefore holds nothing sensitive. Existing connections are migrated on first launch. A machine with no keychain falls back to the file and says so on stderr.
 - **Test a connection** before saving, with the server version and the latency; server errors are shown exactly as they came.
 - Import from a URL (`postgres://…`, `redis://…`, `rediss://…`).
 - A colour and an **environment** (local, dev, staging, production). Production connections get a striped band across the top and ask for confirmation before `DROP`, `TRUNCATE`, a `DELETE`/`UPDATE` without `WHERE`, and before saving edits.
