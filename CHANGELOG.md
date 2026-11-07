@@ -16,6 +16,9 @@ All notable changes to 5db. The format follows
 
 ### Added
 
+- A restore picks which database on the target server to replay into, and can
+  create one there, instead of always using the one the connection was saved
+  with.
 - A replication screen: two endpoints and the link between them, which reports
   what each server allows before offering to start. The engine behind it is not
   built yet.

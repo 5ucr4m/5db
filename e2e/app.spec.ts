@@ -429,22 +429,39 @@ test("backup and restore: dump a database and put it on another target", async (
   expect(job.state, `dump failed: ${job.error}`).toBe("done");
 
   await page.getByPlaceholder("A .dump or .sql file, or a backup folder").fill(archive);
-  await page.locator("main select").last().selectOption(target.id);
+  // The connection says which server; the database is picked separately,
+  // because a restore replays into one database and a migration usually wants
+  // a fresh one.
+  await page.locator("main select").nth(0).selectOption(target.id);
+  await expect(page.getByText("Database on that server")).toBeVisible();
+  const made = `e2e_made_here_${process.pid}`;
+  await page.getByPlaceholder(/or create one/).fill(made);
+  await page.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(page.locator("main select").nth(1)).toHaveValue(made, { timeout: 20000 });
   await page.getByRole("button", { name: "Restore", exact: true }).click();
 
   // The app asks before writing to another server, and names what it will do.
-  await expect(page.getByText(/will be applied to e2e_restored/)).toBeVisible();
+  await expect(page.getByText(new RegExp(`will be applied to ${made}`))).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Restore", exact: true }).click();
 
   await expect(page.getByText("Restore finished")).toBeVisible({ timeout: 60000 });
 
   // The structure really landed on the other database.
+  // The structure landed on the database that was created here, not on the one
+  // the connection happened to be saved with.
   const check = await rpc<{ results: { rows: string[][] }[] }>("pg.execute", {
     connectionId: target.id,
+    database: made,
     record: false,
     sql: "SELECT count(*)::text FROM information_schema.tables WHERE table_schema = 'public'",
   });
   expect(Number(check.results[0].rows[0][0])).toBeGreaterThan(3);
+  await rpc("pg.execute", {
+    connectionId: target.id,
+    database: "postgres",
+    record: false,
+    sql: `DROP DATABASE IF EXISTS ${made} WITH (FORCE)`,
+  });
 });
 
 test("create a database from the switcher", async ({ page }) => {

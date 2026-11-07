@@ -1,6 +1,6 @@
-import { AlertTriangle, Archive, CheckCircle2, Download, FolderOpen, Square, Upload } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, Download, FolderOpen, Plus, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Badge, Button, cx, Field, Segmented, Select, Spinner, Toggle } from "../../components/ui";
+import { Badge, Button, cx, Field, Input, Segmented, Select, Spinner, Toggle } from "../../components/ui";
 import { ENV_META } from "../../lib/connections";
 import { pickSavePath } from "../../lib/export";
 import { formatBytes, formatDuration } from "../../lib/format";
@@ -49,6 +49,12 @@ export function BackupTab({ session, active }: { session: Session; active: boole
 
   const [restoreFile, setRestoreFile] = useState("");
   const [targetId, setTargetId] = useState("");
+  // A server holds many databases, and restoring into a fresh one is the usual
+  // shape of a migration, so the database is picked separately.
+  const [targetDb, setTargetDb] = useState("");
+  const [targetDbs, setTargetDbs] = useState<{ name: string }[] | null>(null);
+  const [newDbName, setNewDbName] = useState("");
+  const [creatingDb, setCreatingDb] = useState(false);
   const [clean, setClean] = useState(false);
   const [oneTransaction, setOneTransaction] = useState(true);
 
@@ -109,6 +115,41 @@ export function BackupTab({ session, active }: { session: Session; active: boole
   }, [content, format, jobs, noOwner, session.connectionId, session.database, toast]);
 
   // A backup is one file, unless it was written in the directory format.
+  // The databases that actually exist on the chosen server.
+  const loadTargetDbs = useCallback(
+    async (id: string) => {
+      setTargetDbs(null);
+      const picked = targets.find((c) => c.id === id);
+      setTargetDb(picked?.database ?? "");
+      if (!id) return;
+      try {
+        setTargetDbs(await rpc<{ name: string }[]>("pg.databases", { connectionId: id }));
+      } catch (e) {
+        // Without a listing the field still accepts a name typed by hand.
+        toast("error", errorMessage(e));
+        setTargetDbs([]);
+      }
+    },
+    [targets, toast],
+  );
+
+  const createTargetDb = async () => {
+    const name = newDbName.trim();
+    if (!name || !targetId) return;
+    setCreatingDb(true);
+    try {
+      await rpc("pg.createDatabase", { connectionId: targetId, name });
+      toast("ok", `Created ${name}`);
+      setNewDbName("");
+      await loadTargetDbs(targetId);
+      setTargetDb(name);
+    } catch (e) {
+      toast("error", errorMessage(e));
+    } finally {
+      setCreatingDb(false);
+    }
+  };
+
   const pickRestoreSource = async (directory: boolean) => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const path = await open({
@@ -121,13 +162,13 @@ export function BackupTab({ session, active }: { session: Session; active: boole
   };
 
   const restore = useCallback(async () => {
-    if (!restoreFile || !target) return;
+    if (!restoreFile || !target || !targetDb) return;
     const env = ENV_META[target.env] ?? ENV_META.local;
     const plain = restoreFile.endsWith(".sql");
     const ok = await confirm({
       title: `Restore into ${target.name}?`,
       body:
-        `${restoreFile.split("/").pop()} will be applied to ${target.database} on ${target.host}, which is marked ${env.label}.` +
+        `${restoreFile.split("/").pop()} will be applied to ${targetDb} on ${target.host}, which is marked ${env.label}.` +
         (clean ? "\n\nEvery object the backup contains will be dropped there first." : "") +
         "\n\nThis cannot be undone.",
       confirmLabel: clean ? "Drop and restore" : "Restore",
@@ -138,7 +179,7 @@ export function BackupTab({ session, active }: { session: Session; active: boole
     try {
       const started = await rpc<{ id: string; version: string; database: string }>("restore.start", {
         connectionId: target.id,
-        database: target.database,
+        database: targetDb,
         path: restoreFile,
         plain,
         options: { clean, noOwner, singleTransaction: oneTransaction },
@@ -150,7 +191,7 @@ export function BackupTab({ session, active }: { session: Session; active: boole
     } finally {
       setBusy(false);
     }
-  }, [clean, confirm, noOwner, oneTransaction, restoreFile, target, toast]);
+  }, [clean, confirm, noOwner, oneTransaction, restoreFile, target, targetDb, toast]);
 
   const cancel = async () => {
     if (!job) return;
@@ -320,15 +361,67 @@ export function BackupTab({ session, active }: { session: Session; active: boole
             </Field>
 
             <Field label="Restore into" hint="Any saved PostgreSQL connection, including one on another server.">
-              <Select value={targetId} onChange={(e) => setTargetId(e.target.value)}>
+              <Select
+                value={targetId}
+                onChange={(e) => {
+                  setTargetId(e.target.value);
+                  void loadTargetDbs(e.target.value);
+                }}
+              >
                 <option value="">Pick a connection…</option>
                 {targets.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name} — {c.database} on {c.host} ({ENV_META[c.env]?.label ?? c.env})
+                    {c.name} — {c.host} ({ENV_META[c.env]?.label ?? c.env})
                   </option>
                 ))}
               </Select>
             </Field>
+
+            {target && (
+              <Field
+                label="Database on that server"
+                hint="A restore replays into one database. Make a new one when the backup should not land on top of anything."
+              >
+                <div className="flex gap-2">
+                  <Select className="flex-1" value={targetDb} onChange={(e) => setTargetDb(e.target.value)} disabled={!targetDbs}>
+                    {!targetDbs ? (
+                      <option value="">Reading the server…</option>
+                    ) : (
+                      <>
+                        <option value="">Pick a database…</option>
+                        {targetDbs.map((d) => (
+                          <option key={d.name} value={d.name}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </>
+                    )}
+                  </Select>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <Input
+                    mono
+                    className="h-8 flex-1 text-xs"
+                    value={newDbName}
+                    placeholder="or create one: neoprop_novo"
+                    onChange={(e) => setNewDbName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && newDbName.trim()) void createTargetDb();
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    icon={<Plus className="size-3.5" />}
+                    onClick={createTargetDb}
+                    loading={creatingDb}
+                    disabled={!newDbName.trim()}
+                  >
+                    Create
+                  </Button>
+                </div>
+              </Field>
+            )}
 
             <div className="flex flex-wrap items-center gap-5">
               <Toggle
@@ -364,7 +457,7 @@ export function BackupTab({ session, active }: { session: Session; active: boole
             variant={target?.env === "prod" || clean ? "danger" : "secondary"}
             icon={<Upload className="size-3.5" />}
             onClick={restore}
-            disabled={missing || running || busy || !restoreFile || !target}
+            disabled={missing || running || busy || !restoreFile || !target || !targetDb}
           >
             Restore
           </Button>
