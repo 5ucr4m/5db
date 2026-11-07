@@ -841,3 +841,193 @@ async fn listen_notify() {
         .await
         .expect_err("an empty channel must be refused");
 }
+
+/// Polls a dump or restore to completion and returns the finished job.
+async fn finish_job(s: &AppState, id: &str) -> Value {
+    for _ in 0..600 {
+        let job = call(s, "dump.status", json!({ "id": id })).await;
+        match job["state"].as_str() {
+            Some("running") => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            _ => return job,
+        }
+    }
+    panic!("job {id} never finished");
+}
+
+/// Shape worth comparing across a migration: what exists and how much is in it.
+async fn census(s: &AppState, conn: &str, database: &str) -> Value {
+    let sql = "SELECT json_build_object(
+                 'tables', (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema')),
+                 'indexes', (SELECT count(*) FROM pg_indexes WHERE schemaname NOT IN ('pg_catalog','information_schema')),
+                 'constraints', (SELECT count(*) FROM information_schema.table_constraints WHERE constraint_schema NOT IN ('pg_catalog','information_schema')),
+                 'customers', (SELECT count(*) FROM customers),
+                 'orders', (SELECT count(*) FROM orders),
+                 'order_items', (SELECT count(*) FROM order_items),
+                 'max_order_id', (SELECT max(id) FROM orders),
+                 'next_order_id', (SELECT last_value FROM orders_id_seq)
+               )::text";
+    let out = call(
+        s,
+        "pg.execute",
+        json!({ "connectionId": conn, "database": database, "sql": sql, "record": false }),
+    )
+    .await;
+    let text = out["results"][0]["rows"][0][0]
+        .as_str()
+        .expect("census row")
+        .to_string();
+    serde_json::from_str(&text).expect("census json")
+}
+
+#[tokio::test]
+async fn dump_and_restore_moves_a_database_to_another_target() {
+    let s = state();
+    let source = pg_conn(&s).await;
+
+    // pg_dump has to exist and be at least as new as the server, which is
+    // exactly what the feature refuses to proceed without.
+    let tools = call(&s, "dump.tools", json!({})).await;
+    if tools["pgDump"].is_null() || tools["pgRestore"].is_null() {
+        eprintln!("skipping: no pg_dump/pg_restore on this machine");
+        return;
+    }
+
+    let target_db = format!("shop_restored_{}", std::process::id());
+    let admin = json!({ "connectionId": source, "database": "postgres", "record": false });
+    let drop_sql = format!("DROP DATABASE IF EXISTS \"{target_db}\" WITH (FORCE)");
+    call(&s, "pg.execute", {
+        let mut a = admin.clone();
+        a["sql"] = json!(drop_sql);
+        a
+    })
+    .await;
+    call(&s, "pg.execute", {
+        let mut a = admin.clone();
+        a["sql"] = json!(format!("CREATE DATABASE \"{target_db}\""));
+        a
+    })
+    .await;
+
+    let dir = std::env::temp_dir().join(format!("5db-dump-{}", uuid_like()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("shop.dump");
+
+    // ---- dump -------------------------------------------------------------
+    let started = call(
+        &s,
+        "dump.start",
+        json!({ "connectionId": source, "database": "shop", "path": archive.display().to_string(),
+                "options": { "content": "all", "format": "custom" } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "dump failed: {}", job["error"]);
+    assert!(
+        job["bytes"].as_u64().unwrap() > 10_000,
+        "the archive is suspiciously small: {job}"
+    );
+    assert!(archive.is_file());
+
+    // ---- restore into the other database -----------------------------------
+    let started = call(
+        &s,
+        "restore.start",
+        json!({ "connectionId": source, "database": target_db, "path": archive.display().to_string(),
+                "plain": false, "options": { "singleTransaction": true } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "restore failed: {}", job["error"]);
+
+    // ---- the two have to agree ---------------------------------------------
+    let before = census(&s, &source, "shop").await;
+    let after = census(&s, &source, &target_db).await;
+    assert_eq!(before, after, "the restored database differs from the source");
+    assert_eq!(after["orders"], 20_000, "sanity: the fixture really was carried over");
+    assert!(
+        after["next_order_id"].as_i64().unwrap() >= after["max_order_id"].as_i64().unwrap(),
+        "the sequence came across behind its own table, so the next insert would collide"
+    );
+
+    call(&s, "pg.execute", {
+        let mut a = admin.clone();
+        a["sql"] = json!(drop_sql);
+        a
+    })
+    .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_structure_only_dump_carries_no_rows() {
+    let s = state();
+    let source = pg_conn(&s).await;
+    if call(&s, "dump.tools", json!({})).await["pgDump"].is_null() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("5db-dump-{}", uuid_like()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let plain = dir.join("schema.sql");
+    let started = call(
+        &s,
+        "dump.start",
+        json!({ "connectionId": source, "database": "shop", "path": plain.display().to_string(),
+                "options": { "content": "structure", "format": "plain" } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "dump failed: {}", job["error"]);
+
+    let sql = std::fs::read_to_string(&plain).unwrap();
+    assert!(sql.contains("CREATE TABLE"), "a structure dump must carry the tables");
+    assert!(
+        !sql.contains("COPY public.orders"),
+        "a structure dump must not carry rows"
+    );
+
+    // And the mirror image: data only, no DDL.
+    let data = dir.join("data.sql");
+    let started = call(
+        &s,
+        "dump.start",
+        json!({ "connectionId": source, "database": "shop", "path": data.display().to_string(),
+                "options": { "content": "data", "format": "plain" } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "dump failed: {}", job["error"]);
+    let sql = std::fs::read_to_string(&data).unwrap();
+    assert!(sql.contains("COPY public.orders"), "a data dump must carry rows");
+    assert!(
+        !sql.contains("CREATE TABLE"),
+        "a data dump must not recreate the tables"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_dump_can_be_cancelled_and_says_so() {
+    let s = state();
+    let source = pg_conn(&s).await;
+    if call(&s, "dump.tools", json!({})).await["pgDump"].is_null() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("5db-dump-{}", uuid_like()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("cancelled.dump");
+    let started = call(
+        &s,
+        "dump.start",
+        json!({ "connectionId": source, "database": "shop", "path": archive.display().to_string(),
+                "options": { "content": "all", "format": "custom" } }),
+    )
+    .await;
+    let id = started["id"].as_str().unwrap().to_string();
+    call(&s, "dump.cancel", json!({ "id": id })).await;
+    let job = finish_job(&s, &id).await;
+    assert_eq!(job["state"], "cancelled");
+    assert!(job["error"].is_null(), "a cancellation is not a failure");
+    let _ = std::fs::remove_dir_all(&dir);
+}

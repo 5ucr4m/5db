@@ -6,6 +6,13 @@ All notable changes to 5db. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Backup and restore, for moving a database to another server: everything,
+  structure only or data only, as a compressed archive or plain SQL, restored
+  into any other saved connection. Driven by `pg_dump`/`pg_restore`, which are
+  discovered on the machine and version-checked against the server.
+
 ## [0.2.0] — 2026-10-27
 
 First tagged release. Everything below landed on top of the initial commit.

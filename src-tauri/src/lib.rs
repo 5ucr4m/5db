@@ -1,3 +1,4 @@
+pub mod dump;
 pub mod error;
 pub mod pg;
 pub mod rds;

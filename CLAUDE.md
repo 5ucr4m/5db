@@ -67,6 +67,7 @@ keyed by primary key or, when there is none, by `ctid`.
 | `src-tauri/src/ssh.rs` | SSH tunnels (russh) on an ephemeral local port |
 | `src-tauri/src/store.rs` | SQLite: connections, history, saved queries, settings |
 | `src-tauri/src/secrets.rs` | the keychain vault, with a file fallback |
+| `src-tauri/src/dump.rs` | finding pg_dump/pg_restore, and running them as jobs |
 | `src/store/app.ts` | the Zustand store: sessions, tabs, toasts, confirmations |
 | `src/lib/` | pure logic, and the only code with unit tests |
 | `src/components/grid/DataGrid.tsx` | the hand-written virtualized grid |
@@ -93,6 +94,12 @@ keyed by primary key or, when there is none, by `ctid`.
   is. Pass `normal-case` for those.
 - **Tailwind 4 CSS is excluded from Biome** (`src/styles.css`); its at-rules are
   not in Biome's grammar yet.
+- **Backups shell out.** `pg_dump` and `pg_restore` are not bundled; `dump.rs`
+  finds them and refuses a tool older than the server, because that is the one
+  combination that silently produces an unusable dump. Connection details reach
+  them through the environment only — a password in `argv` is readable by every
+  process on the machine — and the config passed in is the one `effective()`
+  returns, so a tunnelled connection is dumped through its tunnel.
 - **`russh` pulls `aws-lc-sys`**, which needs NASM on Windows and CMake
   everywhere. That is why the release workflow has those steps.
 - **The updater signing key cannot be replaced.** The public half is in

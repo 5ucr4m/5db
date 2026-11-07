@@ -1,6 +1,7 @@
 import {
   Activity,
   Antenna,
+  Archive,
   Clock,
   Eye,
   FileCode2,
@@ -19,6 +20,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, cx, EmptyState, Kbd, MenuItem, Popover, Resizer, Spinner, useResizable } from "../../components/ui";
 import { connectionSummary, ENV_META } from "../../lib/connections";
 import { type Session, type Tab, useApp, useConnection } from "../../store/app";
+import { BackupTab } from "../pg/BackupTab";
 import { ListenTab } from "../pg/ListenTab";
 import { ActivityTab, FunctionTab, HistoryTab } from "../pg/MiscTabs";
 import { PgSidebar } from "../pg/PgSidebar";
@@ -43,6 +45,8 @@ function tabIcon(t: Tab) {
       return Activity;
     case "listen":
       return Antenna;
+    case "backup":
+      return Archive;
     case "redis-key":
       return KeyRound;
     case "redis-console":
@@ -167,6 +171,8 @@ function TabContent({ session, tab, active }: { session: Session; tab: Tab; acti
       return <ActivityTab session={session} active={active} />;
     case "listen":
       return <ListenTab session={session} active={active} />;
+    case "backup":
+      return <BackupTab session={session} active={active} />;
     case "redis-key":
       return <KeyTab key={tab.key} session={session} tab={tab} />;
     case "redis-console":

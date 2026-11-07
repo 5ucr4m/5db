@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::dump::{self, Jobs};
 use crate::error::{AppError, AppResult};
 use crate::pg::{self, Listener, PgSession};
 use crate::rds::{self, RedisSession};
@@ -51,6 +52,8 @@ pub struct AppState {
     /// One notification connection per (connection, database), opened lazily
     /// the first time a channel is listened to.
     listeners: RwLock<HashMap<String, Arc<Listener>>>,
+    /// Dumps and restores in flight; the frontend polls them by id.
+    jobs: Arc<Jobs>,
     redis: RwLock<HashMap<String, Arc<RedisSession>>>,
     tunnels: Mutex<HashMap<String, Arc<Tunnel>>>,
     /// Serialises session creation so parallel first requests share one connect.
@@ -71,6 +74,7 @@ impl AppState {
             data_dir,
             pg: RwLock::new(HashMap::new()),
             listeners: RwLock::new(HashMap::new()),
+            jobs: Arc::new(Jobs::default()),
             redis: RwLock::new(HashMap::new()),
             tunnels: Mutex::new(HashMap::new()),
             connecting: Mutex::new(()),
@@ -168,6 +172,18 @@ impl AppState {
         let session = Arc::new(rds::connect(&cfg, db).await?);
         self.redis.write().await.insert(key, session.clone());
         Ok(session)
+    }
+
+    /// The major version of the server behind a connection, which decides
+    /// whether the installed tools are new enough to dump it.
+    async fn server_major(&self, connection_id: &str, database: Option<&str>) -> AppResult<u32> {
+        let s = self.pg(connection_id, database).await?;
+        let row = s.main.client.query_one("SHOW server_version_num", &[]).await?;
+        let num: String = row.get(0);
+        let n: u32 = num
+            .parse()
+            .map_err(|_| AppError::msg(format!("The server reported an unreadable version: {num}")))?;
+        Ok(n / 10_000)
     }
 
     async fn disconnect(&self, connection_id: &str) {
@@ -403,6 +419,88 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
                 Some(l) => Ok(l.drain()),
                 None => Ok(json!({ "notices": [], "channels": [] })),
             }
+        }
+
+        // ---- backup and restore ----------------------------------------
+        "dump.tools" => Ok(dump::tools()),
+        "dump.start" => {
+            let t: PgTarget = p(&params)?;
+            let options: dump::DumpOptions = p(&params["options"])?;
+            let path: String = p(&params["path"])?;
+            let target = write_target(state, &path)?;
+
+            let tool = dump::find_tool("pg_dump")
+                .ok_or_else(|| AppError::msg("pg_dump was not found on this machine. Install the PostgreSQL client tools, or pick the built-in engine."))?;
+            dump::check_version(
+                &tool,
+                state.server_major(&t.connection_id, t.database.as_deref()).await?,
+            )?;
+
+            let session = state.pg(&t.connection_id, t.database.as_deref()).await?;
+            let database = session.database.clone();
+            // The effective config, so a tunnelled connection is dumped
+            // through its tunnel like every other session.
+            let cfg = state.effective(state.store.get_connection(&t.connection_id)?).await?;
+            let args = dump::dump_args(&database, &target, &options);
+            let id = dump::spawn(
+                state.jobs.clone(),
+                "dump",
+                &tool,
+                args,
+                dump::env_for(&cfg),
+                Some(target.display().to_string()),
+                true,
+            )
+            .await?;
+            Ok(json!({ "id": id, "tool": tool.path, "version": tool.version, "file": target.display().to_string() }))
+        }
+        "restore.start" => {
+            let source: String = p(&params["path"])?;
+            let source = std::path::PathBuf::from(&source);
+            if !source.is_file() {
+                return Err(AppError::msg(format!("There is no file at {}.", source.display())));
+            }
+            let connection_id: String = p(&params["connectionId"])?;
+            let database: Option<String> = params["database"].as_str().map(str::to_string);
+            let options: dump::RestoreOptions = p(&params["options"])?;
+            // A plain-SQL dump is applied by psql, a custom archive by pg_restore.
+            let plain = params["plain"].as_bool().unwrap_or(false);
+
+            let name = if plain { "psql" } else { "pg_restore" };
+            let tool = dump::find_tool(name).ok_or_else(|| {
+                AppError::msg(format!(
+                    "{name} was not found on this machine. Install the PostgreSQL client tools."
+                ))
+            })?;
+            dump::check_version(&tool, state.server_major(&connection_id, database.as_deref()).await?)?;
+
+            let session = state.pg(&connection_id, database.as_deref()).await?;
+            let target_db = session.database.clone();
+            let cfg = state.effective(state.store.get_connection(&connection_id)?).await?;
+            let args = dump::restore_args(&target_db, &source, &options, plain);
+            let id = dump::spawn(
+                state.jobs.clone(),
+                "restore",
+                &tool,
+                args,
+                dump::env_for(&cfg),
+                Some(source.display().to_string()),
+                false,
+            )
+            .await?;
+            Ok(json!({ "id": id, "tool": tool.path, "version": tool.version, "database": target_db }))
+        }
+        "dump.status" => {
+            let id: String = p(&params["id"])?;
+            state
+                .jobs
+                .get(&id)
+                .ok_or_else(|| AppError::msg("That job is no longer being tracked."))
+        }
+        "dump.cancel" => {
+            let id: String = p(&params["id"])?;
+            state.jobs.cancel(&id)?;
+            Ok(Value::Null)
         }
 
         // ---- redis -----------------------------------------------------

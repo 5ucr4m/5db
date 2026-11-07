@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
 
 // End-to-end flows against the docker fixtures (`pnpm db:up`).
@@ -366,6 +367,84 @@ test("connections are grouped in the list", async ({ page }) => {
   await page.getByPlaceholder("Find a connection").fill("Reporting");
   await expect(page.getByText("Analytics")).toBeVisible();
   await expect(page.getByText("Shop prod")).toHaveCount(0);
+});
+
+test("backup and restore: dump a database and put it on another target", async ({ page }) => {
+  const dir = `/tmp/5db-e2e-backup-${process.pid}`;
+  const archive = `${dir}/shop.sql`;
+  // The backend refuses a destination whose directory does not exist, which is
+  // the guard working; the save dialog would only ever offer a real one.
+  mkdirSync(dir, { recursive: true });
+
+  // Everything the test needs on the backend, before the page reads the list.
+  const admin = await rpc<{ id: string }>("connections.save", {
+    name: "admin",
+    kind: "postgres",
+    host: "127.0.0.1",
+    port: 54329,
+    user: "fivedb",
+    password: "fivedb",
+    database: "postgres",
+    sslMode: "disable",
+  });
+  await rpc("pg.execute", { connectionId: admin.id, record: false, sql: "DROP DATABASE IF EXISTS e2e_restored WITH (FORCE)" });
+  await rpc("pg.execute", { connectionId: admin.id, record: false, sql: "CREATE DATABASE e2e_restored" });
+  await rpc("connections.delete", { id: admin.id });
+  const target = await rpc<{ id: string }>("connections.save", {
+    name: "Restore target",
+    kind: "postgres",
+    host: "127.0.0.1",
+    port: 54329,
+    user: "fivedb",
+    password: "fivedb",
+    database: "e2e_restored",
+    sslMode: "disable",
+  });
+  await page.reload();
+
+  await addConnection(page, PG_URL, "Shop");
+  const source = (await rpc<{ id: string; name: string }[]>("connections.list")).find((c) => c.name === "Shop");
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByPlaceholder(/Jump to a table/).fill("backup");
+  await page.getByText("Backup and restore").click();
+
+  // The tab reports which pg_dump it found, which is what makes the engine usable.
+  await expect(page.getByText(/pg_dump \d+/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Choose a file and back up/ })).toBeVisible();
+
+  // A browser cannot open a save dialog, so the dump runs through the same RPC
+  // the button calls. The restore below is driven entirely through the UI.
+  const started = await rpc<{ id: string }>("dump.start", {
+    connectionId: source?.id,
+    database: "shop",
+    path: archive,
+    options: { content: "structure", format: "plain" },
+  });
+  let job = await rpc<{ state: string; error: string | null }>("dump.status", { id: started.id });
+  for (let i = 0; i < 300 && job.state === "running"; i++) {
+    await page.waitForTimeout(100);
+    job = await rpc("dump.status", { id: started.id });
+  }
+  expect(job.state, `dump failed: ${job.error}`).toBe("done");
+
+  await page.getByPlaceholder("Choose a .dump or .sql file").fill(archive);
+  await page.locator("main select").last().selectOption(target.id);
+  await page.getByRole("button", { name: "Restore", exact: true }).click();
+
+  // The app asks before writing to another server, and names what it will do.
+  await expect(page.getByText(/will be applied to e2e_restored/)).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Restore", exact: true }).click();
+
+  await expect(page.getByText("Restore finished")).toBeVisible({ timeout: 60000 });
+
+  // The structure really landed on the other database.
+  const check = await rpc<{ results: { rows: string[][] }[] }>("pg.execute", {
+    connectionId: target.id,
+    record: false,
+    sql: "SELECT count(*)::text FROM information_schema.tables WHERE table_schema = 'public'",
+  });
+  expect(Number(check.results[0].rows[0][0])).toBeGreaterThan(3);
 });
 
 test("cancel a long running query", async ({ page }) => {

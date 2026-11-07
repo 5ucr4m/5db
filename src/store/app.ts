@@ -19,6 +19,7 @@ export type Tab =
   | { id: string; kind: "function"; title: string; schema: string; name: string; oid: number; preview?: boolean }
   | { id: string; kind: "activity"; title: string }
   | { id: string; kind: "listen"; title: string }
+  | { id: string; kind: "backup"; title: string }
   | { id: string; kind: "history"; title: string }
   | { id: string; kind: "redis-key"; title: string; key: string; preview?: boolean }
   | { id: string; kind: "redis-console"; title: string }
@@ -131,6 +132,7 @@ function tabKey(t: TabInput | Tab): string | null {
       return `key:${t.key}`;
     case "activity":
     case "listen":
+    case "backup":
     case "history":
     case "redis-console":
     case "redis-info":

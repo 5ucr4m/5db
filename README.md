@@ -30,6 +30,7 @@ A desktop client for **PostgreSQL** and **Redis** in the spirit of Postico, buil
 - Export as CSV, JSON, Markdown and `INSERT`; export a whole table through `COPY`.
 - Truncate, drop and refresh a materialized view.
 - **Server activity** (`pg_stat_activity`) with cancel and terminate for backends.
+- **Backup and restore**, for moving a database to another server. Everything, structure only or data only; a compressed archive or plain SQL; restored into any other saved connection. The work is done by `pg_dump`/`pg_restore`, which 5db finds on the machine and refuses to use when they are older than the server. Credentials go to them as environment, never on the command line, and a tunnelled connection is dumped through its tunnel. Restoring asks first, names the target, and warns louder when it is production.
 - **`LISTEN`/`NOTIFY`**: subscribe to channels and watch payloads arrive, formatted when they are JSON, with the sender's backend pid. A sender is built in for trying one out.
 
 **SQL editor**
