@@ -1244,3 +1244,51 @@ async fn creating_a_database_from_the_connection() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn capabilities_say_what_each_feature_can_do_here() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    let cap = call(
+        &s,
+        "pg.capabilities",
+        json!({ "connectionId": conn, "database": "shop" }),
+    )
+    .await;
+
+    assert!(cap["major"].as_u64().unwrap() >= 12, "unexpected server: {cap}");
+    assert!(cap["walLevel"].is_string());
+
+    // Whatever the server allows, the two switches are reported separately and
+    // a refusal always says what would have to change.
+    for feature in ["logicalReplication", "incrementalBaseBackup"] {
+        let f = &cap[feature];
+        assert!(f["available"].is_boolean(), "{feature} has to report availability");
+        if f["available"] == false {
+            let blockers = f["blockers"].as_array().expect("blockers");
+            assert!(!blockers.is_empty(), "{feature} is unavailable without saying why");
+            assert!(
+                blockers.iter().all(|b| b.as_str().is_some_and(|t| t.len() > 20)),
+                "a blocker has to be readable, not a flag: {blockers:?}"
+            );
+        }
+    }
+
+    // The fixture ships wal_level = replica, so replication is refused and the
+    // reason names the setting the user would have to change.
+    if cap["walLevel"] != "logical" {
+        let blockers = cap["logicalReplication"]["blockers"].as_array().unwrap();
+        assert!(
+            blockers.iter().any(|b| b.as_str().unwrap().contains("wal_level")),
+            "the wal_level blocker has to be named: {blockers:?}"
+        );
+        assert_eq!(cap["logicalReplication"]["available"], false);
+    }
+
+    // And the thing that is true on every server, stated so the UI cannot
+    // imply otherwise.
+    assert_eq!(
+        cap["logicalDumpIsAlwaysFull"], true,
+        "pg_dump has no incremental mode anywhere"
+    );
+}

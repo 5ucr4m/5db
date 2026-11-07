@@ -94,6 +94,12 @@ keyed by primary key or, when there is none, by `ctid`.
   is. Pass `normal-case` for those.
 - **Tailwind 4 CSS is excluded from Biome** (`src/styles.css`); its at-rules are
   not in Biome's grammar yet.
+- **Two different switches get confused.** `wal_level = logical` enables logical
+  replication, a continuous stream. Incremental *backups* are separate:
+  physical, whole-cluster, PostgreSQL 17+, gated on `summarize_wal`. Neither
+  makes `pg_dump` incremental — nothing does. `pg::capabilities` reports both
+  separately and names what would have to change; never let the UI imply a
+  scheduled logical dump could be anything but full.
 - **Parallel dumps need the directory format.** `pg_dump` refuses `--jobs` with
   any other, so `DumpOptions::check` rejects the combination before a command is
   built. A directory dump is also measured by walking it: a folder's own

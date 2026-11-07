@@ -299,6 +299,10 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
             let t: PgTarget = p(&params)?;
             pg::list_databases(&*state.pg(&t.connection_id, t.database.as_deref()).await?).await
         }
+        "pg.capabilities" => {
+            let t: PgTarget = p(&params)?;
+            pg::capabilities(&*state.pg(&t.connection_id, t.database.as_deref()).await?).await
+        }
         "pg.createDatabase" => {
             let t: PgTarget = p(&params)?;
             let name: String = p(&params["name"])?;

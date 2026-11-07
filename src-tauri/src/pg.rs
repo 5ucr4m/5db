@@ -1255,6 +1255,104 @@ impl Listener {
     }
 }
 
+/// What this server will and will not allow, so the scheduling and sync
+/// features can pick a mode instead of guessing and failing later.
+///
+/// Two different switches are often confused. `wal_level = logical` enables
+/// logical replication, which is a continuous stream of changes. Incremental
+/// *backups* are a separate thing entirely: physical, whole-cluster, PostgreSQL
+/// 17 or newer, and gated on `summarize_wal`. Neither makes `pg_dump`
+/// incremental, because nothing does.
+pub async fn capabilities(s: &PgSession) -> AppResult<Value> {
+    // current_setting(..., true) returns NULL instead of erroring on a setting
+    // the server is too old to have, which keeps this one round trip.
+    let row = s
+        .main
+        .client
+        .query_one(
+            "SELECT current_setting('server_version_num')::int AS version_num,
+                    current_setting('server_version')          AS version,
+                    current_setting('wal_level')               AS wal_level,
+                    current_setting('summarize_wal', true)     AS summarize_wal,
+                    current_setting('max_replication_slots')::int AS max_slots,
+                    current_setting('max_wal_senders')::int    AS max_senders,
+                    (SELECT count(*)::int FROM pg_replication_slots)   AS used_slots,
+                    (SELECT rolsuper      FROM pg_roles WHERE rolname = current_user) AS is_superuser,
+                    (SELECT rolreplication FROM pg_roles WHERE rolname = current_user) AS can_replicate,
+                    (SELECT count(*)::int FROM pg_publication)        AS publications",
+            &[],
+        )
+        .await?;
+
+    let version_num: i32 = row.get("version_num");
+    let major = (version_num / 10_000) as u32;
+    let wal_level: String = row.get("wal_level");
+    let summarize_wal: Option<String> = row.get("summarize_wal");
+    let max_slots: i32 = row.get("max_slots");
+    let used_slots: i32 = row.get("used_slots");
+    let is_superuser: Option<bool> = row.get("is_superuser");
+    let can_replicate: Option<bool> = row.get("can_replicate");
+
+    let privileged = is_superuser.unwrap_or(false) || can_replicate.unwrap_or(false);
+    let slots_free = max_slots - used_slots;
+
+    // Logical replication needs the write-ahead log to carry row changes, a
+    // role allowed to stream them, and a slot to stream into.
+    let mut replication_blockers: Vec<String> = Vec::new();
+    if wal_level != "logical" {
+        replication_blockers.push(format!(
+            "wal_level is \"{wal_level}\" and has to be \"logical\" (a server setting, and it needs a restart)"
+        ));
+    }
+    if !privileged {
+        replication_blockers.push(format!(
+            "the role \"{}\" has neither SUPERUSER nor REPLICATION",
+            s.cfg.user
+        ));
+    }
+    if slots_free < 1 {
+        replication_blockers.push(format!("all {max_slots} replication slots are in use"));
+    }
+
+    // Incremental physical backup is a different switch, and whole-cluster.
+    let mut incremental_blockers: Vec<String> = Vec::new();
+    if major < 17 {
+        incremental_blockers.push(format!(
+            "the server is PostgreSQL {major}; incremental base backups arrived in 17"
+        ));
+    }
+    if summarize_wal.as_deref() != Some("on") {
+        incremental_blockers.push("summarize_wal is off (a server setting, and it needs a restart)".to_string());
+    }
+    if !privileged {
+        incremental_blockers.push(format!("the role \"{}\" cannot take a base backup", s.cfg.user));
+    }
+
+    Ok(json!({
+        "serverVersion": row.get::<_, String>("version"),
+        "major": major,
+        "walLevel": wal_level,
+        "summarizeWal": summarize_wal,
+        "replicationSlots": { "max": max_slots, "used": used_slots },
+        "publications": row.get::<_, i32>("publications"),
+        "isSuperuser": is_superuser,
+        "canReplicate": can_replicate,
+        // What each feature can actually do on this server.
+        "logicalReplication": {
+            "available": replication_blockers.is_empty(),
+            "blockers": replication_blockers,
+        },
+        "incrementalBaseBackup": {
+            "available": incremental_blockers.is_empty(),
+            "blockers": incremental_blockers,
+        },
+        // pg_dump has no incremental mode on any server, so a scheduled logical
+        // backup is always a full one. Stated here so the UI never implies
+        // otherwise.
+        "logicalDumpIsAlwaysFull": true,
+    }))
+}
+
 /// Creates a database on the server this session is connected to.
 ///
 /// `CREATE DATABASE` cannot run inside a transaction and cannot take its name
