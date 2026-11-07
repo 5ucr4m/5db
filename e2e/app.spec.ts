@@ -501,7 +501,7 @@ test("replication says what the servers allow before offering to start", async (
   // The fixture ships wal_level = replica, so the pair is refused and the
   // screen names the setting rather than failing later with a driver error.
   await expect(page.getByText(/wal_level=replica/).first()).toBeVisible({ timeout: 20000 });
-  await page.locator("main select").last().selectOption({ label: "Replica target · postgres" });
+  await page.locator("main select").last().selectOption({ label: "postgres · Replica target" });
   await expect(page.getByText("This pair cannot replicate yet")).toBeVisible({ timeout: 20000 });
   // Twice on purpose: in the list, and in the diagram's accessible description.
   await expect(page.getByText(/wal_level is "replica" and has to be "logical"/)).toHaveCount(2);

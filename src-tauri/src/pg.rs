@@ -1328,8 +1328,19 @@ pub async fn capabilities(s: &PgSession) -> AppResult<Value> {
         incremental_blockers.push(format!("the role \"{}\" cannot take a base backup", s.cfg.user));
     }
 
+    // A Debian build reports "18.6 (Debian 18.6-1.pgdg13+2)", which is four
+    // lines of noise wherever it is shown. Keep both: the number to display,
+    // and the whole string for when the build actually matters.
+    let version_full: String = row.get("version");
+    let version_short = version_full
+        .split_whitespace()
+        .next()
+        .unwrap_or(&version_full)
+        .to_string();
+
     Ok(json!({
-        "serverVersion": row.get::<_, String>("version"),
+        "serverVersion": version_short,
+        "serverVersionFull": version_full,
         "major": major,
         "walLevel": wal_level,
         "summarizeWal": summarize_wal,

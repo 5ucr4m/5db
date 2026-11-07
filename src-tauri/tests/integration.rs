@@ -1259,6 +1259,18 @@ async fn capabilities_say_what_each_feature_can_do_here() {
     assert!(cap["major"].as_u64().unwrap() >= 12, "unexpected server: {cap}");
     assert!(cap["walLevel"].is_string());
 
+    // A Debian build reports "18.6 (Debian 18.6-1.pgdg13+2)", which is four
+    // lines of noise on a card. The displayable version is just the number.
+    let short = cap["serverVersion"].as_str().expect("serverVersion");
+    assert!(
+        !short.contains(' '),
+        "the displayed version must be the number alone: {short:?}"
+    );
+    assert!(
+        cap["serverVersionFull"].as_str().unwrap().starts_with(short),
+        "the full string has to still be available for when the build matters"
+    );
+
     // Whatever the server allows, the two switches are reported separately and
     // a refusal always says what would have to change.
     for feature in ["logicalReplication", "incrementalBaseBackup"] {

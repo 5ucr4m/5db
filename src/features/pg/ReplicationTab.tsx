@@ -9,6 +9,7 @@ import { type Session, useApp } from "../../store/app";
 
 interface Capabilities {
   serverVersion: string;
+  serverVersionFull: string;
   major: number;
   walLevel: string;
   logicalReplication: { available: boolean; blockers: string[] };
@@ -46,14 +47,16 @@ function Endpoint({
 }) {
   const env = connection ? (ENV_META[connection.env] ?? ENV_META.local) : null;
   return (
-    <div className="flex w-[250px] shrink-0 flex-col gap-2 self-stretch">
+    <div className="flex w-[280px] shrink-0 flex-col gap-2 self-stretch">
       <span className="text-2xs font-semibold tracking-[0.14em] text-faint uppercase">
         {side === "source" ? "Publishes from" : "Subscribes on"}
       </span>
 
       <div
         className={cx(
-          "flex flex-col gap-3 rounded-xl border bg-panel p-4 transition-colors",
+          // flex-1 inside a stretched column, so a name that wraps to two
+          // lines does not leave the two cards ending at different heights.
+          "flex flex-1 flex-col gap-3 rounded-xl border bg-panel p-4 transition-colors",
           connection ? "border-line" : "border-dashed border-line-strong",
         )}
         style={connection && env ? { boxShadow: `inset 3px 0 0 0 ${env.color}` } : undefined}
@@ -72,29 +75,37 @@ function Endpoint({
             </span>
           )}
           <div className="min-w-0">
-            <div className="truncate font-display text-[17px] leading-tight font-semibold">
+            <div
+              className="font-display text-[16px] leading-tight font-semibold [display:-webkit-box] [overflow:hidden] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]"
+              title={connection?.name}
+            >
               {connection?.name ?? (side === "source" ? "Pick a source" : "Pick a target")}
             </div>
-            {connection && env && <div className="text-xs text-muted">{env.label}</div>}
+            {connection && env && <div className="mt-0.5 text-xs text-muted">{env.label}</div>}
           </div>
         </div>
 
         <Select value={connection?.id ?? ""} onChange={(e) => onPick(e.target.value)} aria-label={`${side} connection`}>
           <option value="">Choose a connection…</option>
           {connections.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name} · {c.database}
+            // The database first, because that is what is being picked, then
+            // the connection name to tell two of the same database apart. A
+            // long name truncating here costs nothing: the card shows it whole.
+            <option key={c.id} value={c.id} title={`${c.name} — ${c.database} on ${c.host}`}>
+              {c.database} · {c.name}
             </option>
           ))}
         </Select>
 
         {connection ? (
           caps ? (
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-mono text-[11px] text-faint">PostgreSQL {caps.serverVersion}</span>
+            <div className="mt-auto flex items-center justify-between gap-2">
+              <span className="truncate font-mono text-[11px] text-faint" title={caps.serverVersionFull}>
+                PostgreSQL {caps.serverVersion}
+              </span>
               <span
                 className={cx(
-                  "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]",
+                  "inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px]",
                   caps.walLevel === "logical" ? "border-ok/30 bg-ok/10 text-ok" : "border-warn/30 bg-warn/10 text-warn",
                 )}
                 title="Logical replication needs the write-ahead log to carry row changes"
@@ -253,7 +264,7 @@ export function ReplicationTab({ session }: { session: Session }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto flex max-w-[760px] items-center justify-center gap-5 px-8 pt-10 pb-8">
+        <div className="mx-auto flex max-w-[820px] items-center justify-center gap-5 px-8 pt-10 pb-8">
           <Endpoint
             side="source"
             connection={source}
@@ -271,7 +282,7 @@ export function ReplicationTab({ session }: { session: Session }) {
           />
         </div>
 
-        <div className="mx-auto max-w-[760px] px-8 pb-10">
+        <div className="mx-auto max-w-[820px] px-8 pb-10">
           {probing ? (
             <div className="flex items-center justify-center gap-2 text-sm text-muted">
               <Spinner className="size-4" /> Reading what these servers allow…
