@@ -1255,6 +1255,45 @@ impl Listener {
     }
 }
 
+/// Collects planner statistics for a database.
+///
+/// `pg_restore` does not do this, and without it the planner has no idea how
+/// large anything is: a freshly restored database will choose bad plans until
+/// somebody runs it. It gets a connection of its own with no statement
+/// timeout, because on a large database this legitimately takes a while and
+/// being killed halfway is worse than waiting.
+pub async fn analyze(cfg: &ConnectionConfig, database: &str) -> AppResult<Value> {
+    let conn = connect(cfg, database).await?;
+
+    let before: i64 = conn
+        .client
+        .query_one(
+            "SELECT count(*) FROM pg_stat_user_tables WHERE last_analyze IS NULL AND last_autoanalyze IS NULL",
+            &[],
+        )
+        .await?
+        .get(0);
+
+    let started = Instant::now();
+    // A maintenance statement the user asked for; the connection's own timeout
+    // would cut it off on exactly the databases that need it most.
+    conn.client.batch_execute("SET statement_timeout = 0; ANALYZE").await?;
+    let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+
+    let tables: i64 = conn
+        .client
+        .query_one("SELECT count(*) FROM pg_stat_user_tables", &[])
+        .await?
+        .get(0);
+
+    Ok(json!({
+        "database": database,
+        "tables": tables,
+        "hadNoStatistics": before,
+        "durationMs": elapsed,
+    }))
+}
+
 /// What this server will and will not allow, so the scheduling and sync
 /// features can pick a mode instead of guessing and failing later.
 ///

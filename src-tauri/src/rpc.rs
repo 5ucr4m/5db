@@ -303,6 +303,13 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
             let t: PgTarget = p(&params)?;
             pg::capabilities(&*state.pg(&t.connection_id, t.database.as_deref()).await?).await
         }
+        "pg.analyze" => {
+            let t: PgTarget = p(&params)?;
+            let session = state.pg(&t.connection_id, t.database.as_deref()).await?;
+            let database = t.database.clone().unwrap_or_else(|| session.database.clone());
+            let cfg = state.effective(state.store.get_connection(&t.connection_id)?).await?;
+            pg::analyze(&cfg, &database).await
+        }
         "pg.createDatabase" => {
             let t: PgTarget = p(&params)?;
             let name: String = p(&params["name"])?;

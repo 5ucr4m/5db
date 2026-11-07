@@ -1337,3 +1337,66 @@ async fn a_blocked_server_is_told_how_to_unblock_itself() {
         );
     }
 }
+
+#[tokio::test]
+async fn analyze_collects_the_statistics_a_restore_leaves_behind() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    let name = format!("analyze_me_{}", std::process::id());
+    let admin = |sql: String| json!({ "connectionId": conn, "database": "postgres", "record": false, "sql": sql });
+    call(
+        &s,
+        "pg.execute",
+        admin(format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)")),
+    )
+    .await;
+    call(&s, "pg.execute", admin(format!("CREATE DATABASE \"{name}\""))).await;
+
+    // A table with rows and no statistics, which is the state a restore leaves.
+    call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": conn, "database": name, "record": false,
+                "sql": "CREATE TABLE t (id int); INSERT INTO t SELECT generate_series(1, 5000)" }),
+    )
+    .await;
+    let blind = call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": conn, "database": name, "record": false,
+                "sql": "SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND c.reltuples = -1" }),
+    )
+    .await;
+    assert_eq!(
+        blind["results"][0]["rows"][0][0], "1",
+        "the planner should not know this table yet"
+    );
+
+    let out = call(&s, "pg.analyze", json!({ "connectionId": conn, "database": name })).await;
+    assert_eq!(out["database"], name);
+    assert!(out["tables"].as_i64().unwrap() >= 1);
+    assert!(
+        out["hadNoStatistics"].as_i64().unwrap() >= 1,
+        "it should report what was blind: {out}"
+    );
+
+    // And afterwards the planner knows the size.
+    let after = call(
+        &s,
+        "pg.execute",
+        json!({ "connectionId": conn, "database": name, "record": false,
+                "sql": "SELECT reltuples::bigint::text FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname='t'" }),
+    )
+    .await;
+    assert_eq!(
+        after["results"][0]["rows"][0][0], "5000",
+        "ANALYZE has to leave a real estimate behind"
+    );
+
+    call(
+        &s,
+        "pg.execute",
+        admin(format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)")),
+    )
+    .await;
+}

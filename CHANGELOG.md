@@ -16,6 +16,8 @@ All notable changes to 5db. The format follows
 
 ### Added
 
+- A finished restore explains that the result is normally smaller than its
+  source, and offers to collect the planner statistics a restore does not.
 - A restore picks which database on the target server to replay into, and can
   create one there, instead of always using the one the connection was saved
   with.

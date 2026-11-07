@@ -1,4 +1,4 @@
-import { AlertTriangle, Archive, CheckCircle2, Download, FolderOpen, Plus, Square, Upload } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, Download, FolderOpen, Plus, Sparkles, Square, Upload } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Badge, Button, cx, Field, Input, Segmented, Select, Spinner, Toggle } from "../../components/ui";
 import { ENV_META } from "../../lib/connections";
@@ -59,6 +59,10 @@ export function BackupTab({ session, active }: { session: Session; active: boole
   const [oneTransaction, setOneTransaction] = useState(true);
 
   const [job, setJob] = useState<Job | null>(null);
+  // Where the last restore landed, so the follow-up can act on it.
+  const [restored, setRestored] = useState<{ connectionId: string; database: string } | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzed, setAnalyzed] = useState<{ tables: number; hadNoStatistics: number; durationMs: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -185,6 +189,8 @@ export function BackupTab({ session, active }: { session: Session; active: boole
         options: { clean, noOwner, singleTransaction: oneTransaction },
       });
       toast("info", `Restoring into ${started.database}`);
+      setRestored({ connectionId: target.id, database: targetDb });
+      setAnalyzed(null);
       setJob(await rpc<Job>("dump.status", { id: started.id }));
     } catch (e) {
       toast("error", errorMessage(e));
@@ -192,6 +198,23 @@ export function BackupTab({ session, active }: { session: Session; active: boole
       setBusy(false);
     }
   }, [clean, confirm, noOwner, oneTransaction, restoreFile, target, targetDb, toast]);
+
+  const runAnalyze = async () => {
+    if (!restored) return;
+    setAnalyzing(true);
+    try {
+      const out = await rpc<{ tables: number; hadNoStatistics: number; durationMs: number }>("pg.analyze", {
+        connectionId: restored.connectionId,
+        database: restored.database,
+      });
+      setAnalyzed(out);
+      toast("ok", `Collected statistics for ${out.tables} tables`);
+    } catch (e) {
+      toast("error", errorMessage(e));
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   const cancel = async () => {
     if (!job) return;
@@ -492,6 +515,36 @@ export function BackupTab({ session, active }: { session: Session; active: boole
                 </span>
               )}
             </div>
+
+            {job.kind === "restore" && job.state === "done" && restored && (
+              <div className="selectable mx-4 mb-3 rounded-lg border border-line bg-raised p-3">
+                <p className="text-sm text-fg">
+                  A restored database is usually <b className="font-semibold">smaller</b> than the one it came from. Its indexes are rebuilt
+                  packed and it carries no dead rows, so the difference is reclaimed bloat rather than missing data.
+                </p>
+                <p className="mt-2 text-sm text-muted">
+                  What it does not have yet is planner statistics — a restore does not collect them, and until it happens the planner is
+                  choosing plans blind.
+                </p>
+                <div className="mt-3 flex items-center gap-3">
+                  <Button
+                    size="sm"
+                    variant={analyzed ? "secondary" : "primary"}
+                    icon={<Sparkles className="size-3.5" />}
+                    onClick={runAnalyze}
+                    loading={analyzing}
+                  >
+                    {analyzed ? "Collect again" : "Collect statistics"}
+                  </Button>
+                  {analyzed && (
+                    <span className="text-xs text-muted">
+                      {analyzed.tables} tables in {formatDuration(analyzed.durationMs)}
+                      {analyzed.hadNoStatistics > 0 && ` · ${analyzed.hadNoStatistics} had none at all`}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
 
             {job.error && (
               <div className="selectable mx-4 mb-3 rounded-lg border border-danger/25 bg-danger/[0.06] p-3 text-sm whitespace-pre-wrap text-fg">
