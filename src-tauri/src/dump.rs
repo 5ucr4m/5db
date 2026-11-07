@@ -117,28 +117,35 @@ fn probe(path: &Path, name: &str) -> Option<Tool> {
     })
 }
 
-/// Looks for one binary on PATH first, then in the known install locations.
+/// Looks for one binary and returns the newest it finds, rather than the first.
+/// Machines commonly carry several: Debian puts a version-dispatching wrapper
+/// on PATH that answers for the oldest installed cluster while the newer
+/// binaries sit in /usr/lib/postgresql/N/bin, and taking the first hit there
+/// would refuse a job the machine is perfectly able to do.
 pub fn find_tool(name: &str) -> Option<Tool> {
     let file = exe(name);
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let candidate = dir.join(&file);
-            if candidate.is_file()
-                && let Some(t) = probe(&candidate, name)
-            {
-                return Some(t);
-            }
-        }
-    }
-    for dir in extra_dirs() {
+    let mut dirs: Vec<PathBuf> = std::env::var("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    dirs.extend(extra_dirs());
+
+    let mut best: Option<Tool> = None;
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for dir in dirs {
         let candidate = dir.join(&file);
-        if candidate.is_file()
-            && let Some(t) = probe(&candidate, name)
+        // The same binary reached through two directories is one candidate.
+        let key = candidate.canonicalize().unwrap_or_else(|_| candidate.clone());
+        if !candidate.is_file() || seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        if let Some(t) = probe(&candidate, name)
+            && best.as_ref().is_none_or(|b| t.major > b.major)
         {
-            return Some(t);
+            best = Some(t);
         }
     }
-    None
+    best
 }
 
 /// What the frontend needs to decide whether the pg_dump engine is usable.
@@ -701,6 +708,46 @@ mod tests {
         let o = RestoreOptions { clean: true, ..o };
         let a = restore_args("shop", Path::new("/x"), &o, false);
         assert!(a.contains(&"--clean".to_string()) && a.contains(&"--if-exists".to_string()));
+    }
+
+    /// Writes a script that answers `--version` like the real thing.
+    #[cfg(unix)]
+    fn fake_tool(dir: &Path, name: &str, version: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\necho '{name} (PostgreSQL) {version}'\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_newest_tool_wins_even_when_an_older_one_comes_first_on_path() {
+        let root = std::env::temp_dir().join(format!(
+            "5db-tools-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        // Debian's shape: a wrapper answering for the older version ahead of the
+        // newer binaries. The numbers are far beyond any real release so that a
+        // PostgreSQL actually installed on this machine cannot win instead.
+        fake_tool(&root.join("usr-bin"), "pg_dump", "90.1");
+        fake_tool(&root.join("pg-new"), "pg_dump", "91.2");
+
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        let probe_path = format!("{}:{}", root.join("usr-bin").display(), root.join("pg-new").display());
+        unsafe { std::env::set_var("PATH", &probe_path) };
+        let found = find_tool("pg_dump");
+        unsafe { std::env::set_var("PATH", old_path) };
+        let _ = std::fs::remove_dir_all(&root);
+
+        let found = found.expect("the fake tools should have been found");
+        assert_eq!(
+            found.major, 91,
+            "the first hit on PATH was older; the newest has to win"
+        );
+        assert_eq!(found.version, "91.2");
     }
 
     #[test]
