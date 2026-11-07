@@ -426,6 +426,7 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
         "dump.start" => {
             let t: PgTarget = p(&params)?;
             let options: dump::DumpOptions = p(&params["options"])?;
+            options.check()?;
             let path: String = p(&params["path"])?;
             let target = write_target(state, &path)?;
 
@@ -457,8 +458,9 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
         "restore.start" => {
             let source: String = p(&params["path"])?;
             let source = std::path::PathBuf::from(&source);
-            if !source.is_file() {
-                return Err(AppError::msg(format!("There is no file at {}.", source.display())));
+            // A directory-format backup is a folder, not a file.
+            if !source.exists() {
+                return Err(AppError::msg(format!("There is nothing at {}.", source.display())));
             }
             let connection_id: String = p(&params["connectionId"])?;
             let database: Option<String> = params["database"].as_str().map(str::to_string);

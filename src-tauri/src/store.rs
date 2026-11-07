@@ -171,11 +171,14 @@ impl Store {
         if self.vault.backend() != Backend::Keychain {
             return Ok(());
         }
-        let stale: Vec<ConnectionConfig> = self
-            .read_rows()?
-            .into_iter()
-            .filter(|c| self.vault.needs_migration(c))
-            .collect();
+        let rows = self.read_rows()?;
+        // Secrets written by an older build sit in one keychain item each; fold
+        // them into the single item now, so the user is asked to authorise once
+        // rather than once per connection on every rebuild from here on.
+        let ids: Vec<String> = rows.iter().map(|c| c.id.clone()).collect();
+        self.vault.absorb_legacy(&ids);
+
+        let stale: Vec<ConnectionConfig> = rows.into_iter().filter(|c| self.vault.needs_migration(c)).collect();
         if stale.is_empty() {
             return Ok(());
         }

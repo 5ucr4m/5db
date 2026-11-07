@@ -189,13 +189,16 @@ pub enum Content {
     Data,
 }
 
-/// The archive format. Custom is the one worth defaulting to: compressed, and
-/// `pg_restore` can replay it selectively and in parallel. Plain is readable
-/// SQL that any psql can apply.
+/// The archive format.
+///
+/// Custom is a single compressed file and the sensible default. Directory is
+/// the only one pg_dump can write with several workers at once, which is what
+/// a large database needs. Plain is readable SQL that any psql can apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Format {
     Custom,
+    Directory,
     Plain,
 }
 
@@ -203,8 +206,15 @@ impl Format {
     pub fn extension(self) -> &'static str {
         match self {
             Format::Custom => "dump",
+            // A directory, not a file; the suffix only keeps it recognisable.
+            Format::Directory => "dumpdir",
             Format::Plain => "sql",
         }
+    }
+
+    /// Whether `pg_dump` can split the work across workers in this format.
+    pub fn parallel(self) -> bool {
+        self == Format::Directory
     }
 }
 
@@ -220,6 +230,23 @@ pub struct DumpOptions {
     /// different roles needs.
     #[serde(default = "yes")]
     pub no_owner: bool,
+    /// How many tables to dump at once. Only the directory format can do this;
+    /// anything above one opens that many connections plus one.
+    #[serde(default)]
+    pub jobs: u32,
+}
+
+impl DumpOptions {
+    /// `pg_dump` refuses `--jobs` outside the directory format, and its own
+    /// message does not say what to do about it.
+    pub fn check(&self) -> AppResult<()> {
+        if self.jobs > 1 && !self.format.parallel() {
+            return Err(AppError::msg(
+                "A parallel backup has to be written as a directory. Pick the directory format, or set the workers back to one.",
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn yes() -> bool {
@@ -278,8 +305,13 @@ pub fn dump_args(database: &str, target: &Path, o: &DumpOptions) -> Vec<String> 
     ];
     a.push(match o.format {
         Format::Custom => "--format=custom".into(),
+        Format::Directory => "--format=directory".into(),
         Format::Plain => "--format=plain".into(),
     });
+    if o.format.parallel() && o.jobs > 1 {
+        a.push("--jobs".into());
+        a.push(o.jobs.to_string());
+    }
     match o.content {
         Content::All => {}
         Content::Structure => a.push("--schema-only".into()),
@@ -533,7 +565,7 @@ pub async fn spawn(
                 tokio::spawn(async move {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                        let size = output_size(Path::new(&path));
                         let still_running = jobs3.with(|m| {
                             if let Some(j) = m.get_mut(&id3) {
                                 j.bytes = size;
@@ -564,10 +596,9 @@ pub async fn spawn(
             }
         };
 
-        let size = watched
-            .as_ref()
-            .and_then(|p| std::fs::metadata(p).ok())
-            .map(|m| m.len());
+        // Walked, not stat-ed: a directory's own metadata reports the size of
+        // the inode, not of what is inside it.
+        let size = watched.as_ref().map(|p| output_size(Path::new(p)));
         jobs.with(|m| {
             if let Some(j) = m.get_mut(&job_id) {
                 j.state = outcome.0;
@@ -591,6 +622,24 @@ pub async fn spawn(
     Ok(id)
 }
 
+/// How large the output is so far, whether it is one file or a directory of
+/// them, so the panel can report progress for either format.
+pub fn output_size(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::metadata(path) else { return 0 };
+    if meta.is_file() {
+        return meta.len();
+    }
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    entries
+        .flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => output_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
 /// Everything a dump or restore needs from the connection, resolved.
 pub fn env_for(cfg: &ConnectionConfig) -> Vec<(String, String)> {
     pg_env(cfg)
@@ -606,6 +655,7 @@ mod tests {
             format,
             schemas: vec![],
             no_owner: true,
+            jobs: 0,
         }
     }
 
@@ -626,6 +676,55 @@ mod tests {
 
         let a = dump_args("shop", Path::new("/tmp/x.dump"), &opts(Content::Data, Format::Custom));
         assert!(a.contains(&"--data-only".to_string()));
+    }
+
+    #[test]
+    fn workers_are_only_requested_in_the_format_that_supports_them() {
+        let mut o = opts(Content::All, Format::Directory);
+        o.jobs = 4;
+        let a = dump_args("shop", Path::new("/tmp/out"), &o);
+        assert!(a.contains(&"--format=directory".to_string()));
+        assert!(a.contains(&"--jobs".to_string()) && a.contains(&"4".to_string()));
+        assert!(o.check().is_ok());
+
+        // pg_dump rejects --jobs outside the directory format, so the options
+        // are refused before a command is built at all.
+        let mut o = opts(Content::All, Format::Custom);
+        o.jobs = 4;
+        let err = o.check().expect_err("parallel custom must be refused");
+        assert!(err.message.contains("directory"), "{}", err.message);
+        assert!(!dump_args("shop", Path::new("/tmp/out"), &o).contains(&"--jobs".to_string()));
+    }
+
+    #[test]
+    fn one_worker_is_the_same_as_no_worker_flag() {
+        let mut o = opts(Content::All, Format::Directory);
+        o.jobs = 1;
+        assert!(!dump_args("shop", Path::new("/tmp/out"), &o).contains(&"--jobs".to_string()));
+        assert!(o.check().is_ok());
+    }
+
+    #[test]
+    fn a_directory_dump_is_measured_by_walking_it() {
+        let root = std::env::temp_dir().join(format!(
+            "5db-size-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("a.dat"), vec![0u8; 1000]).unwrap();
+        std::fs::write(root.join("nested/b.dat"), vec![0u8; 2345]).unwrap();
+        assert_eq!(output_size(&root), 3345, "every file under the directory counts");
+
+        let file = root.join("a.dat");
+        assert_eq!(output_size(&file), 1000, "a single-file dump still works");
+        assert_eq!(
+            output_size(&root.join("missing")),
+            0,
+            "nothing yet written is zero, not an error"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

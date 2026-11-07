@@ -32,7 +32,7 @@ interface Job {
 }
 
 type Content = "all" | "structure" | "data";
-type Format = "custom" | "plain";
+type Format = "custom" | "directory" | "plain";
 
 export function BackupTab({ session, active }: { session: Session; active: boolean }) {
   const conn = useConnection(session.connectionId);
@@ -44,6 +44,8 @@ export function BackupTab({ session, active }: { session: Session; active: boole
   const [content, setContent] = useState<Content>("all");
   const [format, setFormat] = useState<Format>("custom");
   const [noOwner, setNoOwner] = useState(true);
+  // Only the directory format can be written by several workers at once.
+  const [jobs, setJobs] = useState(4);
 
   const [restoreFile, setRestoreFile] = useState("");
   const [targetId, setTargetId] = useState("");
@@ -83,7 +85,7 @@ export function BackupTab({ session, active }: { session: Session; active: boole
 
   const backup = useCallback(async () => {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-    const ext = format === "custom" ? "dump" : "sql";
+    const ext = format === "custom" ? "dump" : format === "directory" ? "dumpdir" : "sql";
     const path = await pickSavePath(`${session.database}-${stamp}.${ext}`, ext);
     if (!path || path === "download") {
       if (path === "download") toast("info", "Backups are only available in the installed app.");
@@ -95,7 +97,7 @@ export function BackupTab({ session, active }: { session: Session; active: boole
         connectionId: session.connectionId,
         database: session.database,
         path,
-        options: { content, format, noOwner },
+        options: { content, format, noOwner, jobs: format === "directory" ? jobs : 1 },
       });
       toast("info", `Backing up with pg_dump ${started.version}`);
       setJob(await rpc<Job>("dump.status", { id: started.id }));
@@ -104,15 +106,16 @@ export function BackupTab({ session, active }: { session: Session; active: boole
     } finally {
       setBusy(false);
     }
-  }, [content, format, noOwner, session.connectionId, session.database, toast]);
+  }, [content, format, jobs, noOwner, session.connectionId, session.database, toast]);
 
-  const pickRestoreFile = async () => {
+  // A backup is one file, unless it was written in the directory format.
+  const pickRestoreSource = async (directory: boolean) => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const path = await open({
       multiple: false,
-      directory: false,
-      title: "Choose a backup to restore",
-      filters: [{ name: "Backup", extensions: ["dump", "sql", "backup"] }],
+      directory,
+      title: directory ? "Choose a backup folder to restore" : "Choose a backup file to restore",
+      ...(directory ? {} : { filters: [{ name: "Backup", extensions: ["dump", "sql", "backup"] }] }),
     });
     if (typeof path === "string") setRestoreFile(path);
   };
@@ -225,8 +228,10 @@ export function BackupTab({ session, active }: { session: Session; active: boole
               label="Format"
               hint={
                 format === "custom"
-                  ? "Compressed, and a restore can pick and choose what to replay."
-                  : "Plain SQL you can read and apply with psql anywhere."
+                  ? "One compressed file. A restore can pick and choose what to replay."
+                  : format === "directory"
+                    ? "A folder of files, and the only format several workers can write at once."
+                    : "Plain SQL you can read and apply with psql anywhere."
               }
             >
               <Segmented
@@ -234,12 +239,34 @@ export function BackupTab({ session, active }: { session: Session; active: boole
                 value={format}
                 onChange={(v) => setFormat(v as Format)}
                 options={[
-                  { value: "custom", label: "Archive (.dump)" },
-                  { value: "plain", label: "SQL (.sql)" },
+                  { value: "custom", label: "Archive" },
+                  { value: "directory", label: "Folder" },
+                  { value: "plain", label: "SQL" },
                 ]}
               />
             </Field>
           </div>
+
+          {format === "directory" && (
+            <Field
+              className="mt-3 max-w-md"
+              label="Workers"
+              hint={`Dumps ${jobs} tables at once. It opens ${jobs + 1} connections and is worth matching to the server's cores, not yours.`}
+            >
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={1}
+                  max={16}
+                  value={jobs}
+                  onChange={(e) => setJobs(Number(e.target.value))}
+                  className="h-1 flex-1 cursor-pointer appearance-none rounded-full bg-line accent-iris"
+                  aria-label="Workers"
+                />
+                <span className="w-6 text-right font-mono text-sm text-fg tabular">{jobs}</span>
+              </div>
+            </Field>
+          )}
 
           <div className="mt-3 flex flex-wrap items-center gap-4">
             <Toggle
@@ -276,13 +303,18 @@ export function BackupTab({ session, active }: { session: Session; active: boole
                 <input
                   className="h-8 flex-1 rounded-md border border-line bg-sunken px-2.5 font-mono text-xs text-fg outline-none placeholder:text-faint focus:border-iris"
                   value={restoreFile}
-                  placeholder="Choose a .dump or .sql file"
+                  placeholder="A .dump or .sql file, or a backup folder"
                   onChange={(e) => setRestoreFile(e.target.value)}
                 />
                 {isTauri && (
-                  <Button size="sm" className="h-8" icon={<FolderOpen className="size-3.5" />} onClick={pickRestoreFile}>
-                    Choose
-                  </Button>
+                  <>
+                    <Button size="sm" className="h-8" icon={<FolderOpen className="size-3.5" />} onClick={() => pickRestoreSource(false)}>
+                      File
+                    </Button>
+                    <Button size="sm" className="h-8" icon={<FolderOpen className="size-3.5" />} onClick={() => pickRestoreSource(true)}>
+                      Folder
+                    </Button>
+                  </>
                 )}
               </div>
             </Field>

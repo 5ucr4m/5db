@@ -428,7 +428,7 @@ test("backup and restore: dump a database and put it on another target", async (
   }
   expect(job.state, `dump failed: ${job.error}`).toBe("done");
 
-  await page.getByPlaceholder("Choose a .dump or .sql file").fill(archive);
+  await page.getByPlaceholder("A .dump or .sql file, or a backup folder").fill(archive);
   await page.locator("main select").last().selectOption(target.id);
   await page.getByRole("button", { name: "Restore", exact: true }).click();
 

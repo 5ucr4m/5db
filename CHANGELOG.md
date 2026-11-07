@@ -6,8 +6,18 @@ All notable changes to 5db. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Connection secrets are kept in a single keychain item instead of one per
+  secret. macOS asks for authorisation per item whenever the binary changes, so
+  the old layout meant a prompt for every connection after each update. Secrets
+  written by an earlier build are folded in on first launch and the old items
+  removed.
+
 ### Added
 
+- A directory backup format, the only one `pg_dump` can write with several
+  workers at once, with a worker count and a parallel restore to match.
 - Backup and restore, for moving a database to another server: everything,
   structure only or data only, as a compressed archive or plain SQL, restored
   into any other saved connection. Driven by `pg_dump`/`pg_restore`, which are

@@ -94,6 +94,15 @@ keyed by primary key or, when there is none, by `ctid`.
   is. Pass `normal-case` for those.
 - **Tailwind 4 CSS is excluded from Biome** (`src/styles.css`); its at-rules are
   not in Biome's grammar yet.
+- **Parallel dumps need the directory format.** `pg_dump` refuses `--jobs` with
+  any other, so `DumpOptions::check` rejects the combination before a command is
+  built. A directory dump is also measured by walking it: a folder's own
+  metadata reports the size of the inode, not of what is inside.
+- **One keychain item, not one per secret.** macOS attaches an access list to
+  each item and asks whenever an unrecognised binary reads one, so a item per
+  connection per field meant a prompt per field after every rebuild. Everything
+  is folded into `connection-secrets` and cached for the run. Never split it
+  back up. The keychain tests share that item, so they take a mutex.
 - **Backups shell out.** `pg_dump` and `pg_restore` are not bundled; `dump.rs`
   finds them and refuses a tool older than the server, because that is the one
   combination that silently produces an unusable dump. Connection details reach

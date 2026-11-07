@@ -1068,3 +1068,90 @@ async fn a_dump_can_be_cancelled_and_says_so() {
     assert!(job["error"].is_null(), "a cancellation is not a failure");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn a_parallel_directory_dump_round_trips() {
+    let s = state();
+    let source = pg_conn(&s).await;
+    if !dump_ready(&s, &source).await {
+        return;
+    }
+
+    let target_db = format!("shop_parallel_{}", std::process::id());
+    let admin = json!({ "connectionId": source, "database": "postgres", "record": false });
+    let drop_sql = format!("DROP DATABASE IF EXISTS \"{target_db}\" WITH (FORCE)");
+    call(&s, "pg.execute", {
+        let mut a = admin.clone();
+        a["sql"] = json!(drop_sql);
+        a
+    })
+    .await;
+    call(&s, "pg.execute", {
+        let mut a = admin.clone();
+        a["sql"] = json!(format!("CREATE DATABASE \"{target_db}\""));
+        a
+    })
+    .await;
+
+    let dir = std::env::temp_dir().join(format!("5db-par-{}", uuid_like()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = dir.join("shop.dumpdir");
+
+    // Workers outside the directory format are refused before anything runs,
+    // because pg_dump's own message does not say what to do about it.
+    let err = dispatch(
+        &s,
+        "dump.start",
+        json!({ "connectionId": source, "database": "shop", "path": out.display().to_string(),
+                "options": { "content": "all", "format": "custom", "jobs": 4 } }),
+    )
+    .await
+    .expect_err("a parallel custom dump must be refused");
+    assert!(err.message.contains("directory"), "{}", err.message);
+
+    let started = call(
+        &s,
+        "dump.start",
+        json!({ "connectionId": source, "database": "shop", "path": out.display().to_string(),
+                "options": { "content": "all", "format": "directory", "jobs": 4 } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "parallel dump failed: {}", job["error"]);
+    assert!(out.is_dir(), "the directory format writes a folder, not a file");
+    assert!(
+        std::fs::read_dir(&out).unwrap().count() > 3,
+        "a directory dump is one file per table plus a table of contents"
+    );
+    // Progress is reported by walking the folder, not by stat-ing one file.
+    assert!(
+        job["bytes"].as_u64().unwrap() > 10_000,
+        "the folder size was not measured: {job}"
+    );
+
+    // pg_restore reads a folder and can replay it with workers too.
+    let started = call(
+        &s,
+        "restore.start",
+        json!({ "connectionId": source, "database": target_db, "path": out.display().to_string(),
+                "plain": false, "options": { "singleTransaction": false, "jobs": 4 } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "parallel restore failed: {}", job["error"]);
+
+    let before = census(&s, &source, "shop").await;
+    let after = census(&s, &source, &target_db).await;
+    assert_eq!(
+        before, after,
+        "a parallel round-trip has to land exactly what a serial one does"
+    );
+
+    call(&s, "pg.execute", {
+        let mut a = admin.clone();
+        a["sql"] = json!(drop_sql);
+        a
+    })
+    .await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
