@@ -475,6 +475,40 @@ test("create a database from the switcher", async ({ page }) => {
   });
 });
 
+test("replication says what the servers allow before offering to start", async ({ page }) => {
+  // Seeded before the page reads the list, so no reload is needed afterwards.
+  await rpc("connections.save", {
+    name: "Replica target",
+    kind: "postgres",
+    host: "127.0.0.1",
+    port: 54329,
+    user: "fivedb",
+    password: "fivedb",
+    database: "postgres",
+    sslMode: "disable",
+  });
+  await page.reload();
+  await addConnection(page, PG_URL, "Shop");
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByPlaceholder(/Jump to a table/).fill("replication");
+  await page.getByText("keep another server following this one").click();
+
+  // Nothing is claimed until both ends are chosen.
+  await expect(page.getByText("Pick a target")).toBeVisible();
+  await expect(page.getByText("not configured")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start replicating" })).toHaveCount(0);
+
+  // The fixture ships wal_level = replica, so the pair is refused and the
+  // screen names the setting rather than failing later with a driver error.
+  await expect(page.getByText(/wal_level=replica/).first()).toBeVisible({ timeout: 20000 });
+  await page.locator("main select").last().selectOption({ label: "Replica target · postgres" });
+  await expect(page.getByText("This pair cannot replicate yet")).toBeVisible({ timeout: 20000 });
+  // Twice on purpose: in the list, and in the diagram's accessible description.
+  await expect(page.getByText(/wal_level is "replica" and has to be "logical"/)).toHaveCount(2);
+  await expect(page.locator("li").filter({ hasText: /wal_level is "replica"/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start replicating" })).toHaveCount(0);
+});
+
 test("cancel a long running query", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
   await page.keyboard.press("ControlOrMeta+t");

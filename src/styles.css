@@ -276,3 +276,30 @@ button {
     transition-duration: 1ms !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Replication link
+   The connector between two servers is a gauge: dots move only while data is
+   moving, and the stream thickens as the slot falls behind. Nothing here is
+   decorative, so there is nothing to run when a screen is idle.
+--------------------------------------------------------------------------- */
+@keyframes repl-flow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.repl-flow {
+  animation: repl-flow 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The global rule only shortens durations, which would spin an infinite
+     animation a thousand times a second. Stop this one outright. */
+  .repl-flow {
+    animation: none !important;
+  }
+}

@@ -16,6 +16,9 @@ All notable changes to 5db. The format follows
 
 ### Added
 
+- A replication screen: two endpoints and the link between them, which reports
+  what each server allows before offering to start. The engine behind it is not
+  built yet.
 - Creating a database from the switcher in the sidebar, opened as soon as it exists.
 - A directory backup format, the only one `pg_dump` can write with several
   workers at once, with a worker count and a parallel restore to match.

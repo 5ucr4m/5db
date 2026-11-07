@@ -2,6 +2,7 @@ import {
   Activity,
   Antenna,
   Archive,
+  ArrowLeftRight,
   Bookmark,
   Clock,
   Database,
@@ -132,6 +133,14 @@ export function CommandPalette() {
         group: "Actions",
         icon: <Archive className="size-4" />,
         run: () => st.openTab(sid, { kind: "backup", title: "Backup" }),
+      });
+      out.push({
+        id: "replication",
+        label: "Replication",
+        hint: "keep another server following this one",
+        group: "Actions",
+        icon: <ArrowLeftRight className="size-4" />,
+        run: () => st.openTab(sid, { kind: "replication", title: "Replication" }),
       });
       for (const o of session.objects?.objects ?? []) {
         const Icon = o.kind === "view" ? Eye : o.kind === "matview" ? Layers : Table2;

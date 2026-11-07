@@ -20,6 +20,7 @@ export type Tab =
   | { id: string; kind: "activity"; title: string }
   | { id: string; kind: "listen"; title: string }
   | { id: string; kind: "backup"; title: string }
+  | { id: string; kind: "replication"; title: string }
   | { id: string; kind: "history"; title: string }
   | { id: string; kind: "redis-key"; title: string; key: string; preview?: boolean }
   | { id: string; kind: "redis-console"; title: string }
@@ -133,6 +134,7 @@ function tabKey(t: TabInput | Tab): string | null {
     case "activity":
     case "listen":
     case "backup":
+    case "replication":
     case "history":
     case "redis-console":
     case "redis-info":

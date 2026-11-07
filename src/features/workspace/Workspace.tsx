@@ -2,6 +2,7 @@ import {
   Activity,
   Antenna,
   Archive,
+  ArrowLeftRight,
   Clock,
   Eye,
   FileCode2,
@@ -25,6 +26,7 @@ import { ListenTab } from "../pg/ListenTab";
 import { ActivityTab, FunctionTab, HistoryTab } from "../pg/MiscTabs";
 import { PgSidebar } from "../pg/PgSidebar";
 import { QueryTab } from "../pg/QueryTab";
+import { ReplicationTab } from "../pg/ReplicationTab";
 import { TableTab } from "../pg/TableTab";
 import { ConsoleTab } from "../redis/ConsoleTab";
 import { InfoTab } from "../redis/InfoTab";
@@ -47,6 +49,8 @@ function tabIcon(t: Tab) {
       return Antenna;
     case "backup":
       return Archive;
+    case "replication":
+      return ArrowLeftRight;
     case "redis-key":
       return KeyRound;
     case "redis-console":
@@ -173,6 +177,8 @@ function TabContent({ session, tab, active }: { session: Session; tab: Tab; acti
       return <ListenTab session={session} active={active} />;
     case "backup":
       return <BackupTab session={session} active={active} />;
+    case "replication":
+      return <ReplicationTab session={session} />;
     case "redis-key":
       return <KeyTab key={tab.key} session={session} tab={tab} />;
     case "redis-console":
