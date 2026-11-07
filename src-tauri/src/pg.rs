@@ -1299,10 +1299,15 @@ pub async fn capabilities(s: &PgSession) -> AppResult<Value> {
     // Logical replication needs the write-ahead log to carry row changes, a
     // role allowed to stream them, and a slot to stream into.
     let mut replication_blockers: Vec<String> = Vec::new();
+    // Saying what is wrong without saying what to do about it leaves the user
+    // exactly as stuck. On a self-managed server a superuser can set this from
+    // here; on a managed one it is a console toggle.
+    let mut fix: Option<String> = None;
     if wal_level != "logical" {
-        replication_blockers.push(format!(
-            "wal_level is \"{wal_level}\" and has to be \"logical\" (a server setting, and it needs a restart)"
-        ));
+        replication_blockers.push(format!("wal_level is \"{wal_level}\" and has to be \"logical\""));
+        if is_superuser.unwrap_or(false) {
+            fix = Some("ALTER SYSTEM SET wal_level = 'logical';".to_string());
+        }
     }
     if !privileged {
         replication_blockers.push(format!(
@@ -1352,6 +1357,10 @@ pub async fn capabilities(s: &PgSession) -> AppResult<Value> {
         "logicalReplication": {
             "available": replication_blockers.is_empty(),
             "blockers": replication_blockers,
+            // The statement that would change it, when this role is allowed to
+            // run it. A restart is still needed afterwards either way.
+            "fix": fix,
+            "needsRestart": wal_level != "logical",
         },
         "incrementalBaseBackup": {
             "available": incremental_blockers.is_empty(),

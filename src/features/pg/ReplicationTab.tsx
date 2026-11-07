@@ -12,7 +12,7 @@ interface Capabilities {
   serverVersionFull: string;
   major: number;
   walLevel: string;
-  logicalReplication: { available: boolean; blockers: string[] };
+  logicalReplication: { available: boolean; blockers: string[]; fix: string | null; needsRestart: boolean };
 }
 
 /** What the link between the two servers is doing. */
@@ -49,7 +49,7 @@ function Endpoint({
   return (
     <div className="flex w-[280px] shrink-0 flex-col gap-2 self-stretch">
       <span className="text-2xs font-semibold tracking-[0.14em] text-faint uppercase">
-        {side === "source" ? "Publishes from" : "Subscribes on"}
+        {side === "source" ? "Source · sends changes" : "Target · receives them"}
       </span>
 
       <div
@@ -252,6 +252,8 @@ export function ReplicationTab({ session }: { session: Session }) {
   }, [caps, source, sourceId, target]);
 
   const probing = (sourceId && caps[sourceId] === null) || (targetId && caps[targetId] === null);
+  // Only the source has to be reconfigured, so only its fix is worth offering.
+  const fix = sourceId ? (caps[sourceId]?.logicalReplication.fix ?? null) : null;
   const state: LinkState =
     !source || !target ? { kind: "unconfigured" } : blockers.length ? { kind: "blocked", blockers } : { kind: "ready" };
 
@@ -260,7 +262,7 @@ export function ReplicationTab({ session }: { session: Session }) {
       <div className="flex h-12 shrink-0 items-center gap-3 border-b border-line px-4">
         <ArrowRight className="size-4 text-iris" />
         <h2 className="font-display text-[15px] font-semibold">Replication</h2>
-        <span className="text-xs text-muted">Keep a second server following this one, change by change</span>
+        <span className="text-xs text-muted">Send every change from one server to another, one way only</span>
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
@@ -301,10 +303,20 @@ export function ReplicationTab({ session }: { session: Session }) {
                   </li>
                 ))}
               </ul>
-              <p className="mt-3 text-xs text-faint">
-                These are server settings, not something 5db can change. On a managed provider they are usually a toggle in the console,
-                followed by a restart.
-              </p>
+              {fix ? (
+                <div className="mt-3">
+                  <p className="text-xs text-muted">
+                    This role is allowed to set it from here. Run it on the source, then restart the server — the setting only takes effect
+                    on start.
+                  </p>
+                  <pre className="selectable mt-1.5 overflow-x-auto rounded bg-sunken px-2.5 py-2 font-mono text-xs text-fg">{fix}</pre>
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-faint">
+                  These are server settings, not something 5db can change. On a self-managed server it is a line in postgresql.conf followed
+                  by a restart; on a managed provider, usually a toggle in the console.
+                </p>
+              )}
             </div>
           ) : state.kind === "ready" ? (
             <div className="selectable rounded-lg border border-line bg-panel p-4">
@@ -313,8 +325,8 @@ export function ReplicationTab({ session }: { session: Session }) {
                 Both servers allow it
               </div>
               <p className="mt-2 text-sm text-muted">
-                Starting will copy the structure of {source?.database} to {target?.database}, create a publication here and a subscription
-                there, then stream every change as it happens.
+                Starting will copy the structure of {source?.database} to {target?.database}, then send every change made on the source to
+                the target as it happens. Nothing written on the target is ever sent back — the flow is one way.
               </p>
               <p className="mt-2 text-xs text-faint">
                 Logical replication does not carry schema changes. 5db watches for them and tells you when the two drift apart.

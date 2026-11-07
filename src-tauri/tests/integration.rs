@@ -1304,3 +1304,36 @@ async fn capabilities_say_what_each_feature_can_do_here() {
         "pg_dump has no incremental mode anywhere"
     );
 }
+
+#[tokio::test]
+async fn a_blocked_server_is_told_how_to_unblock_itself() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    let cap = call(
+        &s,
+        "pg.capabilities",
+        json!({ "connectionId": conn, "database": "shop" }),
+    )
+    .await;
+    let repl = &cap["logicalReplication"];
+
+    if cap["walLevel"] == "logical" {
+        assert_eq!(repl["fix"], Value::Null, "nothing to fix when it is already right");
+        return;
+    }
+
+    // Saying what is wrong without saying what to do leaves the user as stuck
+    // as before, so a role that can change it is handed the statement.
+    assert_eq!(repl["needsRestart"], true);
+    if cap["isSuperuser"] == true {
+        let fix = repl["fix"].as_str().expect("a superuser must be given the statement");
+        assert!(fix.contains("wal_level") && fix.contains("logical"), "{fix}");
+        assert!(fix.starts_with("ALTER SYSTEM SET"), "{fix}");
+    } else {
+        assert_eq!(
+            repl["fix"],
+            Value::Null,
+            "a role that cannot run it must not be offered it"
+        );
+    }
+}
