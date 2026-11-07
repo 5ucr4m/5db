@@ -879,16 +879,53 @@ async fn census(s: &AppState, conn: &str, database: &str) -> Value {
     serde_json::from_str(&text).expect("census json")
 }
 
+/// Whether this machine can dump the fixture. When the tools are missing the
+/// backup tests cannot run; when they are older than the server, the guard that
+/// refuses them is asserted instead, so nothing is passed over in silence.
+async fn dump_ready(s: &AppState, conn: &str) -> bool {
+    let tools = call(s, "dump.tools", json!({})).await;
+    let Some(major) = tools["pgDump"]["major"].as_u64() else {
+        eprintln!("skipping the backup tests: pg_dump is not installed on this machine");
+        return false;
+    };
+    let out = call(
+        s,
+        "pg.execute",
+        json!({ "connectionId": conn, "database": "shop", "sql": "SHOW server_version_num", "record": false }),
+    )
+    .await;
+    let server = out["results"][0]["rows"][0][0]
+        .as_str()
+        .and_then(|v| v.parse::<u64>().ok())
+        .expect("server_version_num")
+        / 10_000;
+    if major >= server {
+        return true;
+    }
+    let err = dispatch(
+        s,
+        "dump.start",
+        json!({ "connectionId": conn, "database": "shop",
+                "path": std::env::temp_dir().join("never.dump").display().to_string(),
+                "options": { "content": "all", "format": "custom" } }),
+    )
+    .await
+    .expect_err("a pg_dump older than the server must be refused before anything runs");
+    assert!(
+        err.message.contains(&server.to_string()) && err.message.contains(&major.to_string()),
+        "the refusal has to name both versions: {}",
+        err.message
+    );
+    eprintln!("skipping the backup tests: pg_dump {major} cannot read a {server} server; asserted the refusal instead");
+    false
+}
+
 #[tokio::test]
 async fn dump_and_restore_moves_a_database_to_another_target() {
     let s = state();
     let source = pg_conn(&s).await;
 
-    // pg_dump has to exist and be at least as new as the server, which is
-    // exactly what the feature refuses to proceed without.
-    let tools = call(&s, "dump.tools", json!({})).await;
-    if tools["pgDump"].is_null() || tools["pgRestore"].is_null() {
-        eprintln!("skipping: no pg_dump/pg_restore on this machine");
+    if !dump_ready(&s, &source).await {
         return;
     }
 
@@ -962,7 +999,7 @@ async fn dump_and_restore_moves_a_database_to_another_target() {
 async fn a_structure_only_dump_carries_no_rows() {
     let s = state();
     let source = pg_conn(&s).await;
-    if call(&s, "dump.tools", json!({})).await["pgDump"].is_null() {
+    if !dump_ready(&s, &source).await {
         return;
     }
     let dir = std::env::temp_dir().join(format!("5db-dump-{}", uuid_like()));
@@ -1011,7 +1048,7 @@ async fn a_structure_only_dump_carries_no_rows() {
 async fn a_dump_can_be_cancelled_and_says_so() {
     let s = state();
     let source = pg_conn(&s).await;
-    if call(&s, "dump.tools", json!({})).await["pgDump"].is_null() {
+    if !dump_ready(&s, &source).await {
         return;
     }
     let dir = std::env::temp_dir().join(format!("5db-dump-{}", uuid_like()));

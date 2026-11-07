@@ -41,6 +41,21 @@ jobs:
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
             libxdo-dev libssl-dev build-essential file
 
+      # The runner ships pg_dump 14, which refuses a 17 server — the same guard
+      # the app enforces. The backup tests need tools at least as new as the
+      # fixture, so take them from the PostgreSQL project's own repository.
+      - name: PostgreSQL client tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
       - name: Rust toolchain
         run: rustup show active-toolchain || rustup toolchain install
 
