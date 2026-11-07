@@ -62,12 +62,28 @@ pub enum Backend {
     File,
 }
 
+/// What is known about the stored map.
+///
+/// The distinction between "empty" and "could not read" is the whole point: a
+/// failed read treated as an empty map is written back as an empty map, and
+/// writing an empty map deletes the item. One refused authorisation would
+/// destroy every password the user had.
+enum Known {
+    /// Not looked at yet.
+    Unread,
+    /// Read successfully. An empty map here really means there is nothing.
+    Loaded(HashMap<String, String>),
+    /// The keychain would not answer. Reads give nothing and writes are
+    /// refused, so the secrets stay in the row they came from.
+    Unavailable,
+}
+
 pub struct Vault {
     backend: Backend,
-    /// The whole map, read from the keychain once per run. Without this every
-    /// listing would reach for the keychain again, and on a machine where the
-    /// item needs authorising that is a prompt each time.
-    cache: Mutex<Option<HashMap<String, String>>>,
+    /// Read from the keychain once per run. Without this every listing would
+    /// reach for the keychain again, and on a machine where the item needs
+    /// authorising that is a prompt each time.
+    cache: Mutex<Known>,
 }
 
 impl Vault {
@@ -77,7 +93,7 @@ impl Vault {
     pub fn file() -> Self {
         Vault {
             backend: Backend::File,
-            cache: Mutex::new(None),
+            cache: Mutex::new(Known::Unread),
         }
     }
 
@@ -102,7 +118,7 @@ impl Vault {
             Ok(()) => {
                 let v = Vault {
                     backend: Backend::Keychain,
-                    cache: Mutex::new(None),
+                    cache: Mutex::new(Known::Unread),
                 };
                 v.absorb_legacy_items();
                 v
@@ -122,30 +138,62 @@ impl Vault {
         Entry::new(SERVICE, ACCOUNT)
     }
 
-    /// The whole map, read from the keychain at most once per run.
-    fn map(&self) -> HashMap<String, String> {
+    /// The whole map, read from the keychain at most once per run. `None` when
+    /// the keychain would not answer, which is never the same as empty.
+    fn map(&self) -> Option<HashMap<String, String>> {
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(m) = cache.as_ref() {
-            return m.clone();
+        match &*cache {
+            Known::Loaded(m) => return Some(m.clone()),
+            Known::Unavailable => return None,
+            Known::Unread => {}
         }
-        let loaded = Self::entry()
-            .and_then(|e| e.get_password())
-            .ok()
-            .and_then(|json| serde_json::from_str::<HashMap<String, String>>(&json).ok())
-            .unwrap_or_default();
-        *cache = Some(loaded.clone());
-        loaded
+        let loaded = match Self::entry().and_then(|e| e.get_password()) {
+            Ok(json) => match serde_json::from_str::<HashMap<String, String>>(&json) {
+                Ok(m) => m,
+                Err(e) => {
+                    // Readable but unparseable: refuse to touch it rather than
+                    // overwrite whatever is in there.
+                    eprintln!("5db: the stored secrets could not be read ({e}); leaving the keychain untouched.");
+                    *cache = Known::Unavailable;
+                    return None;
+                }
+            },
+            // Nothing stored yet is a genuine empty map, and the only case
+            // where writing is safe from a standing start.
+            Err(KeyringError::NoEntry) => HashMap::new(),
+            Err(e) => {
+                eprintln!(
+                    "5db: the keychain would not hand over the stored secrets ({e}); nothing will be written to it this run."
+                );
+                *cache = Known::Unavailable;
+                return None;
+            }
+        };
+        *cache = Known::Loaded(loaded.clone());
+        Some(loaded)
     }
 
     /// Writes the map back. Returns false when the keychain would not take it,
     /// so the caller can keep the secret in the row rather than lose it.
+    ///
+    /// Refuses outright unless the current contents were read successfully:
+    /// writing a map assembled on top of an unknown one would drop whatever is
+    /// already in there.
     fn put(&self, map: HashMap<String, String>) -> bool {
+        {
+            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            if !matches!(&*cache, Known::Loaded(_)) {
+                eprintln!("5db: refusing to write the keychain, because its current contents could not be read.");
+                return false;
+            }
+        }
         let json = match serde_json::to_string(&map) {
             Ok(j) => j,
             Err(_) => return false,
         };
         let written = Self::entry().and_then(|e| {
             if map.is_empty() {
+                // Only reached when the map was read and really is empty now.
                 match e.delete_credential() {
                     Err(KeyringError::NoEntry) => Ok(()),
                     other => other,
@@ -156,7 +204,7 @@ impl Vault {
         });
         match written {
             Ok(()) => {
-                *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(map);
+                *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Known::Loaded(map);
                 true
             }
             Err(e) => {
@@ -170,7 +218,7 @@ impl Vault {
     /// it. Costs one authorisation per leftover item, once, and then never
     /// again — which is the whole point of consolidating.
     fn absorb_legacy_items(&self) {
-        let mut map = self.map();
+        let Some(mut map) = self.map() else { return };
         let before = map.len();
         // Only the ids already named in the item can be checked cheaply, so the
         // sweep is driven by what the old layout would have been called. The
@@ -214,7 +262,7 @@ impl Vault {
         if self.backend != Backend::Keychain {
             return;
         }
-        let mut map = self.map();
+        let Some(mut map) = self.map() else { return };
         let mut moved = false;
         for id in ids {
             moved |= self.drain_legacy(id, &mut map);
@@ -232,7 +280,9 @@ impl Vault {
         if self.backend == Backend::File {
             return row;
         }
-        let mut map = self.map();
+        // Without a readable map there is nothing safe to merge into, so the
+        // secrets stay in the row rather than being dropped on the floor.
+        let Some(mut map) = self.map() else { return row };
         let mut taken: Vec<(Field, String)> = Vec::new();
         for f in Field::ALL {
             let value = std::mem::take(f.of(&mut row));
@@ -260,7 +310,7 @@ impl Vault {
         if self.backend == Backend::File {
             return;
         }
-        let map = self.map();
+        let Some(map) = self.map() else { return };
         for f in Field::ALL {
             if !f.of(c).is_empty() {
                 continue; // Still in the file: written before the keychain was used.
@@ -276,7 +326,7 @@ impl Vault {
         if self.backend == Backend::File {
             return;
         }
-        let mut map = self.map();
+        let Some(mut map) = self.map() else { return };
         let before = map.len();
         for f in Field::ALL {
             map.remove(&f.account(id));
@@ -468,5 +518,82 @@ mod one_item_tests {
 
         vault.forget(&id);
         assert_eq!(vault.map(), before);
+    }
+}
+
+#[cfg(test)]
+mod unreadable_keychain {
+    use super::*;
+
+    /// A vault that has already decided the keychain will not answer, which is
+    /// what a refused authorisation looks like from here.
+    fn blind() -> Vault {
+        Vault {
+            backend: Backend::Keychain,
+            cache: Mutex::new(Known::Unavailable),
+        }
+    }
+
+    fn cfg() -> ConnectionConfig {
+        ConnectionConfig {
+            id: "conn-1".into(),
+            password: "pg".into(),
+            ssh_password: "ssh".into(),
+            host: "localhost".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_keychain_that_will_not_answer_never_looks_like_an_empty_one() {
+        assert!(
+            blind().map().is_none(),
+            "an unreadable keychain has to be distinguishable from one holding nothing"
+        );
+    }
+
+    #[test]
+    fn secrets_are_kept_in_the_row_rather_than_dropped() {
+        // The row is what reaches SQLite. Blanking it here while the keychain
+        // holds nothing is how a password disappears for good.
+        let row = blind().store(&cfg());
+        assert_eq!(
+            row.password, "pg",
+            "a secret must never be blanked when it could not be stored"
+        );
+        assert_eq!(row.ssh_password, "ssh");
+    }
+
+    #[test]
+    fn nothing_is_written_on_top_of_contents_that_could_not_be_read() {
+        let v = blind();
+        assert!(
+            !v.put(HashMap::from([("conn-1/password".to_string(), "pg".to_string())])),
+            "writing a map assembled on top of an unknown one would drop whatever is already there"
+        );
+        // And the empty case, which is the one that deletes the item.
+        assert!(
+            !v.put(HashMap::new()),
+            "an empty map must never reach delete_credential from here"
+        );
+    }
+
+    #[test]
+    fn forgetting_is_a_no_op_when_the_map_is_unknown() {
+        // forget() ends in put(); reaching it with an unknown map is exactly
+        // how one refused prompt used to wipe every connection's secrets.
+        blind().forget("conn-1");
+        assert!(blind().map().is_none());
+    }
+
+    #[test]
+    fn a_keychain_holding_nothing_is_still_writable() {
+        // The genuine empty case has to stay usable, or a first run could never
+        // store anything.
+        let fresh = Vault {
+            backend: Backend::Keychain,
+            cache: Mutex::new(Known::Loaded(HashMap::new())),
+        };
+        assert_eq!(fresh.map(), Some(HashMap::new()));
     }
 }

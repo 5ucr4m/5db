@@ -104,6 +104,12 @@ keyed by primary key or, when there is none, by `ctid`.
   any other, so `DumpOptions::check` rejects the combination before a command is
   built. A directory dump is also measured by walking it: a folder's own
   metadata reports the size of the inode, not of what is inside.
+- **A keychain that will not answer is never an empty one.** `Known::Unread` /
+  `Loaded` / `Unavailable` exists because treating a failed read as an empty map
+  meant writing that empty map back, and writing an empty map deletes the item —
+  one refused authorisation destroyed every stored password. Never collapse
+  those three states, never write without a successful read, and when the
+  keychain is unusable leave the secret in the row rather than blanking it.
 - **One keychain item, not one per secret.** macOS attaches an access list to
   each item and asks whenever an unrecognised binary reads one, so a item per
   connection per field meant a prompt per field after every rebuild. Everything
