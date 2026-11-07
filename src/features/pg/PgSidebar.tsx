@@ -16,7 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
-import { cx, IconButton, Input, MenuItem, MenuLabel, Popover, Spinner } from "../../components/ui";
+import { Button, cx, Field, IconButton, Input, MenuItem, MenuLabel, MenuSeparator, Modal, Popover, Spinner } from "../../components/ui";
 import { copyText } from "../../lib/export";
 import { formatBytes } from "../../lib/format";
 import { errorMessage, rpc } from "../../lib/rpc";
@@ -48,6 +48,10 @@ export function PgSidebar({ session }: { session: Session }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [dbOpen, setDbOpen] = useState(false);
   const [databases, setDatabases] = useState<{ name: string; sizeBytes: number }[] | null>(null);
+  const [newDbOpen, setNewDbOpen] = useState(false);
+  const [newDbName, setNewDbName] = useState("");
+  const [newDbTemplate, setNewDbTemplate] = useState("");
+  const [creating, setCreating] = useState(false);
   const dbRef = useRef<HTMLButtonElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; o: PgObject } | null>(null);
@@ -91,6 +95,29 @@ export function PgSidebar({ session }: { session: Session }) {
 
   const openObject = (o: PgObject, preview: boolean) =>
     openTab(session.id, { kind: "table", title: o.name, schema: o.schema, name: o.name, objectKind: o.kind }, { preview });
+
+  const createDatabase = async () => {
+    setCreating(true);
+    try {
+      const made = await rpc<{ name: string }>("pg.createDatabase", {
+        connectionId: session.connectionId,
+        database: session.database,
+        name: newDbName,
+        template: newDbTemplate,
+      });
+      setNewDbOpen(false);
+      setNewDbName("");
+      setNewDbTemplate("");
+      setDatabases(null);
+      toast("ok", `Created ${made.name}`);
+      // Opening it straight away is what you wanted the database for.
+      await switchDatabase(session.id, made.name);
+    } catch (e) {
+      toast("error", errorMessage(e));
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const loadDatabases = async () => {
     setDbOpen((v) => !v);
@@ -145,7 +172,50 @@ export function PgSidebar({ session }: { session: Session }) {
             </MenuItem>
           ))
         )}
+        <MenuSeparator />
+        <MenuItem
+          icon={<Plus className="size-3.5" />}
+          onClick={() => {
+            setDbOpen(false);
+            setNewDbOpen(true);
+          }}
+        >
+          New database…
+        </MenuItem>
       </Popover>
+
+      <Modal
+        open={newDbOpen}
+        onClose={() => setNewDbOpen(false)}
+        title="New database"
+        width={420}
+        footer={
+          <>
+            <Button onClick={() => setNewDbOpen(false)}>Cancel</Button>
+            <Button variant="primary" loading={creating} onClick={createDatabase} disabled={!newDbName.trim()}>
+              Create and open
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4">
+          <Field label="Name" hint="Created on the server this connection is open on.">
+            <Input
+              autoFocus
+              mono
+              value={newDbName}
+              placeholder="my_database"
+              onChange={(e) => setNewDbName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && newDbName.trim()) void createDatabase();
+              }}
+            />
+          </Field>
+          <Field label="Template" hint="Leave empty for template1, which is what the server uses by default.">
+            <Input mono value={newDbTemplate} placeholder="template1" onChange={(e) => setNewDbTemplate(e.target.value)} />
+          </Field>
+        </div>
+      </Modal>
 
       <div className="relative shrink-0 px-2 pb-2">
         <Search className="pointer-events-none absolute top-2 left-4 size-3.5 text-faint" />

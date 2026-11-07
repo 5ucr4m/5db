@@ -1255,6 +1255,39 @@ impl Listener {
     }
 }
 
+/// Creates a database on the server this session is connected to.
+///
+/// `CREATE DATABASE` cannot run inside a transaction and cannot take its name
+/// as a parameter, so the identifier is quoted rather than bound. The template
+/// and encoding are quoted the same way, and a blank one is simply left out so
+/// the server applies its own default.
+pub async fn create_database(s: &PgSession, name: &str, template: &str, encoding: &str) -> AppResult<Value> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(AppError::msg("Give the database a name."));
+    }
+    // Postgres truncates anything longer, which would silently create a
+    // database under a name the user did not ask for.
+    if name.chars().count() > 63 {
+        return Err(AppError::msg("A database name is at most 63 characters."));
+    }
+    let mut sql = format!("CREATE DATABASE {}", quote_ident(name));
+    if !template.trim().is_empty() {
+        sql.push_str(&format!(" TEMPLATE {}", quote_ident(template.trim())));
+    }
+    if !encoding.trim().is_empty() {
+        // An encoding is a string literal, not an identifier.
+        sql.push_str(&format!(" ENCODING {}", literal_text(encoding.trim())));
+    }
+    s.main.client.batch_execute(&sql).await?;
+    Ok(json!({ "name": name, "sql": sql }))
+}
+
+/// A single-quoted SQL string literal.
+fn literal_text(v: &str) -> String {
+    format!("'{}'", v.replace('\'', "''"))
+}
+
 /// Sends a NOTIFY on the session's browsing connection rather than on the
 /// listener's own. Postgres hands a self-notification back inside the message
 /// exchange of the very query that sent it, where the listener's driver never

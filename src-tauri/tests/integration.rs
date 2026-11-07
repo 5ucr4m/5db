@@ -1155,3 +1155,92 @@ async fn a_parallel_directory_dump_round_trips() {
     .await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn creating_a_database_from_the_connection() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    let name = format!("made_by_5db_{}", std::process::id());
+    let drop_it = |sql: String| json!({ "connectionId": conn, "database": "postgres", "record": false, "sql": sql });
+    call(
+        &s,
+        "pg.execute",
+        drop_it(format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)")),
+    )
+    .await;
+
+    let made = call(
+        &s,
+        "pg.createDatabase",
+        json!({ "connectionId": conn, "database": "postgres", "name": &name }),
+    )
+    .await;
+    assert_eq!(made["name"], name);
+
+    // It is really there, and the switcher will list it.
+    let dbs = call(
+        &s,
+        "pg.databases",
+        json!({ "connectionId": conn, "database": "postgres" }),
+    )
+    .await;
+    assert!(
+        dbs.as_array().unwrap().iter().any(|d| d["name"] == name.as_str()),
+        "the new database has to appear in the list"
+    );
+
+    // A name that needs quoting survives intact rather than being mangled.
+    let odd = format!("5db needs \"quoting\" {}", std::process::id());
+    call(
+        &s,
+        "pg.execute",
+        drop_it(format!(
+            "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+            odd.replace('"', "\"\"")
+        )),
+    )
+    .await;
+    let made = call(
+        &s,
+        "pg.createDatabase",
+        json!({ "connectionId": conn, "database": "postgres", "name": &odd }),
+    )
+    .await;
+    assert_eq!(made["name"], odd);
+
+    // Refusals happen before any SQL is sent.
+    for bad in ["", "   "] {
+        dispatch(
+            &s,
+            "pg.createDatabase",
+            json!({ "connectionId": conn, "database": "postgres", "name": bad }),
+        )
+        .await
+        .expect_err("an empty name must be refused");
+    }
+    let long = "x".repeat(64);
+    let err = dispatch(
+        &s,
+        "pg.createDatabase",
+        json!({ "connectionId": conn, "database": "postgres", "name": long }),
+    )
+    .await
+    .expect_err("Postgres would truncate this, so it is refused instead");
+    assert!(err.message.contains("63"), "{}", err.message);
+
+    call(
+        &s,
+        "pg.execute",
+        drop_it(format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)")),
+    )
+    .await;
+    call(
+        &s,
+        "pg.execute",
+        drop_it(format!(
+            "DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)",
+            odd.replace('"', "\"\"")
+        )),
+    )
+    .await;
+}

@@ -16,6 +16,7 @@ All notable changes to 5db. The format follows
 
 ### Added
 
+- Creating a database from the switcher in the sidebar, opened as soon as it exists.
 - A directory backup format, the only one `pg_dump` can write with several
   workers at once, with a worker count and a parallel restore to match.
 - Backup and restore, for moving a database to another server: everything,

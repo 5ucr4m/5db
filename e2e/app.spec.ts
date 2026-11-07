@@ -447,6 +447,34 @@ test("backup and restore: dump a database and put it on another target", async (
   expect(Number(check.results[0].rows[0][0])).toBeGreaterThan(3);
 });
 
+test("create a database from the switcher", async ({ page }) => {
+  await addConnection(page, PG_URL, "Shop");
+  const name = `e2e_made_${process.pid}`;
+  const source = (await rpc<{ id: string; name: string }[]>("connections.list")).find((c) => c.name === "Shop");
+  await rpc("pg.execute", {
+    connectionId: source?.id,
+    database: "postgres",
+    record: false,
+    sql: `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`,
+  });
+
+  await page.getByTitle("Switch database").click();
+  await page.getByText("New database…").click();
+  await page.getByPlaceholder("my_database").fill(name);
+  await page.getByRole("button", { name: "Create and open" }).click();
+
+  // It is created and opened, so the sidebar is now pointed at it.
+  await expect(page.getByTitle("Switch database")).toContainText(name, { timeout: 20000 });
+  await expect(page.getByText("This database has no tables yet.")).toBeVisible();
+
+  await rpc("pg.execute", {
+    connectionId: source?.id,
+    database: "postgres",
+    record: false,
+    sql: `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`,
+  });
+});
+
 test("cancel a long running query", async ({ page }) => {
   await addConnection(page, PG_URL, "Shop");
   await page.keyboard.press("ControlOrMeta+t");

@@ -18,7 +18,7 @@ A desktop client for **PostgreSQL** and **Redis** in the spirit of Postico, buil
 - **Groups**: a free-text folder per connection. The home screen groups by it, the rail draws a rule between groups, and search matches the group name.
 
 **PostgreSQL**
-- A browser for schemas, tables, views, materialized views, foreign tables and functions, with search and a row estimate. Switch database.
+- A browser for schemas, tables, views, materialized views, foreign tables and functions, with search and a row estimate. Switch database, or create one from the same menu.
 - A virtualized grid (rows and columns) with types coloured by family, column resizing and auto-fit, selection by cell, range or row, and copy as TSV.
 - **Sorting** by clicking a header (shift-click for several columns).
 - Visual per-column **filters** with typed operators (=, ≠, <, >, between, contains, starts/ends with, regex, is one of, null, empty, true/false), an all/any mode, a free-form SQL condition and search across every column.
