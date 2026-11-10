@@ -14,6 +14,19 @@ All notable changes to 5db. The format follows
   written by an earlier build are folded in on first launch and the old items
   removed.
 
+### Fixed
+
+- Restoring over a database that already held something failed with "cannot
+  drop constraint … because other objects depend on it" whenever the target had
+  anything the backup did not, such as a foreign key from a later migration.
+  `pg_restore --clean` drops only what the archive lists, one object at a time.
+  The option is now **Replace what is there**: every schema the backup brings is
+  emptied first, in the same transaction as the restore when "All or nothing"
+  is on, so a restore that fails still leaves the target as it was. Schemas the
+  backup does not touch are left alone.
+- A failed backup or restore is quoted from its first error rather than its
+  last few lines, which often left out the error itself.
+
 ### Added
 
 - A finished restore explains that the result is normally smaller than its

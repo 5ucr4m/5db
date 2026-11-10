@@ -169,14 +169,18 @@ export function BackupTab({ session, active }: { session: Session; active: boole
     if (!restoreFile || !target || !targetDb) return;
     const env = ENV_META[target.env] ?? ENV_META.local;
     const plain = restoreFile.endsWith(".sql");
+    // A script has no table of contents, so there is nothing to replace by.
+    const replacing = clean && !plain;
     const ok = await confirm({
       title: `Restore into ${target.name}?`,
       body:
         `${restoreFile.split("/").pop()} will be applied to ${targetDb} on ${target.host}, which is marked ${env.label}.` +
-        (clean ? "\n\nEvery object the backup contains will be dropped there first." : "") +
+        (replacing
+          ? "\n\nEvery schema the backup brings is emptied there first, including whatever is in it that the backup does not have."
+          : "") +
         "\n\nThis cannot be undone.",
-      confirmLabel: clean ? "Drop and restore" : "Restore",
-      danger: target.env === "prod" || clean,
+      confirmLabel: replacing ? "Replace and restore" : "Restore",
+      danger: target.env === "prod" || replacing,
     });
     if (!ok) return;
     setBusy(true);
@@ -186,7 +190,7 @@ export function BackupTab({ session, active }: { session: Session; active: boole
         database: targetDb,
         path: restoreFile,
         plain,
-        options: { clean, noOwner, singleTransaction: oneTransaction },
+        options: { clean: replacing, noOwner, singleTransaction: oneTransaction },
       });
       toast("info", `Restoring into ${started.database}`);
       setRestored({ connectionId: target.id, database: targetDb });
@@ -456,15 +460,19 @@ export function BackupTab({ session, active }: { session: Session; active: boole
                   </span>
                 }
               />
-              <Toggle
-                checked={clean}
-                onChange={setClean}
-                label={
-                  <span className={clean ? "text-danger" : undefined}>
-                    Drop existing objects first <span className="text-muted">— destructive</span>
-                  </span>
-                }
-              />
+              {restoreFile.endsWith(".sql") ? (
+                <span className="text-sm text-muted">A SQL script cannot replace what is there — give it a new database.</span>
+              ) : (
+                <Toggle
+                  checked={clean}
+                  onChange={setClean}
+                  label={
+                    <span className={clean ? "text-danger" : undefined}>
+                      Replace what is there <span className="text-muted">— empties every schema the backup brings</span>
+                    </span>
+                  }
+                />
+              )}
             </div>
           </div>
 
@@ -477,7 +485,7 @@ export function BackupTab({ session, active }: { session: Session; active: boole
 
           <Button
             className="mt-4"
-            variant={target?.env === "prod" || clean ? "danger" : "secondary"}
+            variant={target?.env === "prod" || (clean && !restoreFile.endsWith(".sql")) ? "danger" : "secondary"}
             icon={<Upload className="size-3.5" />}
             onClick={restore}
             disabled={missing || running || busy || !restoreFile || !target || !targetDb}
@@ -550,6 +558,13 @@ export function BackupTab({ session, active }: { session: Session; active: boole
               <div className="selectable mx-4 mb-3 rounded-lg border border-danger/25 bg-danger/[0.06] p-3 text-sm whitespace-pre-wrap text-fg">
                 {job.error}
               </div>
+            )}
+
+            {job.kind === "restore" && job.state === "failed" && job.error?.includes("already exists") && (
+              <p className="mx-4 mb-3 text-sm text-muted">
+                The target already holds what this backup creates. Turn on <b className="font-medium text-fg">Replace what is there</b>, or
+                restore into a new database.
+              </p>
             )}
 
             {job.log.length > 0 && (

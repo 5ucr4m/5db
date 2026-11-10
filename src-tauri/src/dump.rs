@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 
 use crate::error::{AppError, AppResult};
 use crate::store::ConnectionConfig;
@@ -331,8 +331,8 @@ pub fn dump_args(database: &str, target: &Path, o: &DumpOptions) -> Vec<String> 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreOptions {
-    /// Drop each object before recreating it. Destructive, so the frontend
-    /// asks before setting it.
+    /// Empty every schema the backup brings before restoring it. Destructive,
+    /// so the frontend asks before setting it.
     #[serde(default)]
     pub clean: bool,
     #[serde(default = "yes")]
@@ -345,6 +345,11 @@ pub struct RestoreOptions {
     pub jobs: u32,
 }
 
+/// `clean` is deliberately absent from here. pg_restore's own `--clean` drops
+/// only what the archive lists, one object at a time and without CASCADE, so
+/// anything on the target the backup does not know about — a foreign key added
+/// by a later migration is enough — stops the whole restore. The schemas are
+/// emptied beforehand instead; see `Listing` and `script_args`.
 pub fn restore_args(database: &str, source: &Path, o: &RestoreOptions, plain: bool) -> Vec<String> {
     if plain {
         // A plain dump is SQL, so psql applies it.
@@ -352,6 +357,7 @@ pub fn restore_args(database: &str, source: &Path, o: &RestoreOptions, plain: bo
             "--dbname".into(),
             database.to_string(),
             "--no-password".into(),
+            "--no-psqlrc".into(),
             "--file".into(),
             source.display().to_string(),
             // Without this psql reports the failure and carries on, which on a
@@ -371,10 +377,6 @@ pub fn restore_args(database: &str, source: &Path, o: &RestoreOptions, plain: bo
         "--verbose".into(),
         "--exit-on-error".into(),
     ];
-    if o.clean {
-        a.push("--clean".into());
-        a.push("--if-exists".into());
-    }
     if o.no_owner {
         a.push("--no-owner".into());
         a.push("--no-privileges".into());
@@ -389,6 +391,207 @@ pub fn restore_args(database: &str, source: &Path, o: &RestoreOptions, plain: bo
     }
     a.push(source.display().to_string());
     a
+}
+
+/// pg_restore writing the archive out as SQL instead of applying it, for psql
+/// to run behind statements of ours (`apply_args`). It is the only way to put
+/// anything inside the restore's own transaction: pg_restore has no hook for
+/// it. `--single-transaction` matters even though nothing is connected — it
+/// makes the script end in COMMIT, and only a script that was written to the
+/// end has one, so an archive that breaks off halfway rolls everything back.
+pub fn script_args(source: &Path, o: &RestoreOptions) -> Vec<String> {
+    let mut a = vec![
+        "--file".into(),
+        "-".into(),
+        "--single-transaction".into(),
+        "--verbose".into(),
+        "--exit-on-error".into(),
+    ];
+    if o.no_owner {
+        a.push("--no-owner".into());
+        a.push("--no-privileges".into());
+    }
+    a.push(source.display().to_string());
+    a
+}
+
+/// psql running `first`, then whatever arrives on stdin, in one session. `first`
+/// opens the transaction the script then finds itself in; its own BEGIN earns a
+/// warning and nothing else.
+pub fn apply_args(database: &str, first: &str) -> Vec<String> {
+    vec![
+        "--dbname".into(),
+        database.to_string(),
+        "--no-password".into(),
+        "--no-psqlrc".into(),
+        "--quiet".into(),
+        "--set".into(),
+        "ON_ERROR_STOP=1".into(),
+        "--command".into(),
+        first.to_string(),
+        "--file".into(),
+        "-".into(),
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// What an archive holds
+// ---------------------------------------------------------------------------
+
+/// What `pg_restore --list` says about an archive, as far as replacing a
+/// target needs to know.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    /// Every schema the archive puts something into.
+    pub schemas: Vec<String>,
+    /// Whether it defines anything, or only carries rows for tables that are
+    /// expected to exist already.
+    pub has_structure: bool,
+}
+
+/// Every word pg_dump uses in an entry's kind. A listing line is
+/// `id; oid oid KIND SCHEMA NAME OWNER` with nothing to tell a two-word kind
+/// from a kind and a schema, so the kind is taken to be the leading run of
+/// these. Without the list a schema called `PROD` would read as part of it.
+const KIND_WORDS: &[&str] = &[
+    "ACCESS",
+    "ACL",
+    "AGGREGATE",
+    "ATTACH",
+    "BLOB",
+    "BLOBS",
+    "BY",
+    "CAST",
+    "CHECK",
+    "CLASS",
+    "COLLATION",
+    "COMMENT",
+    "CONFIGURATION",
+    "CONSTRAINT",
+    "CONVERSION",
+    "DATA",
+    "DATABASE",
+    "DEFAULT",
+    "DICTIONARY",
+    "DOMAIN",
+    "ENCODING",
+    "EVENT",
+    "EXTENSION",
+    "FAMILY",
+    "FK",
+    "FOREIGN",
+    "FUNCTION",
+    "IN",
+    "INDEX",
+    "LABEL",
+    "LANGUAGE",
+    "LARGE",
+    "MAPPING",
+    "MATERIALIZED",
+    "METADATA",
+    "METHOD",
+    "OBJECT",
+    "OBJECTS",
+    "OPERATOR",
+    "OWNED",
+    "PARSER",
+    "POLICY",
+    "PROCEDURAL",
+    "PROCEDURE",
+    "PROPERTIES",
+    "PUBLICATION",
+    "ROW",
+    "RULE",
+    "SCHEMA",
+    "SEARCH",
+    "SEARCHPATH",
+    "SECURITY",
+    "SEQUENCE",
+    "SERVER",
+    "SET",
+    "SHELL",
+    "STATISTICS",
+    "STDSTRINGS",
+    "SUBSCRIPTION",
+    "TABLE",
+    "TABLES",
+    "TEMPLATE",
+    "TEXT",
+    "TRANSFORM",
+    "TRIGGER",
+    "TYPE",
+    "USER",
+    "VIEW",
+    "WRAPPER",
+];
+
+/// Kinds that create something, as opposed to filling it.
+const STRUCTURE: &[&str] = &[
+    "SCHEMA",
+    "TABLE",
+    "VIEW",
+    "MATERIALIZED VIEW",
+    "SEQUENCE",
+    "TYPE",
+    "FUNCTION",
+    "EXTENSION",
+];
+
+pub fn read_listing(text: &str) -> Listing {
+    let mut out = Listing::default();
+    for line in text.lines() {
+        // Comments start with a semicolon; an entry starts with its id.
+        let Some((id, rest)) = line.split_once("; ") else {
+            continue;
+        };
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let mut words = rest.split(' ').skip(2).peekable();
+        let mut kind: Vec<&str> = Vec::new();
+        while let Some(w) = words.next_if(|w| KIND_WORDS.contains(w)) {
+            kind.push(w);
+        }
+        let kind = kind.join(" ");
+        if STRUCTURE.contains(&kind.as_str()) {
+            out.has_structure = true;
+        }
+        let schema = match (kind.as_str(), words.next()) {
+            // A schema's own entry names it where an object's name goes.
+            ("SCHEMA", Some("-")) => words.next(),
+            (_, Some("-")) | (_, None) => None,
+            (_, s) => s,
+        };
+        if let Some(s) = schema
+            && !s.is_empty()
+            && !out.schemas.iter().any(|known| known == s)
+        {
+            out.schemas.push(s.to_string());
+        }
+    }
+    out
+}
+
+/// Reads an archive's table of contents. Only an archive has one: a plain SQL
+/// dump is a script, and nothing short of parsing it says what it touches.
+pub async fn list_archive(tool: &Tool, source: &Path) -> AppResult<Listing> {
+    let out = Command::new(&tool.path)
+        .arg("--list")
+        .arg(source)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(|e| AppError::msg(format!("Could not run {}: {e}", tool.path)))?;
+    if !out.status.success() {
+        let said = String::from_utf8_lossy(&out.stderr);
+        return Err(AppError::msg(format!(
+            "pg_restore could not read {}: {}",
+            source.display(),
+            said.trim()
+        )));
+    }
+    Ok(read_listing(&String::from_utf8_lossy(&out.stdout)))
 }
 
 // ---------------------------------------------------------------------------
@@ -470,14 +673,61 @@ impl Jobs {
     }
 }
 
-/// Spawns the tool and streams its stderr into the job record. Returns the job
-/// id straight away; the frontend polls for the rest.
-#[allow(clippy::too_many_arguments)]
+/// One process of a job. A job is usually one; a replacing restore is two, with
+/// each one's stdout becoming the next one's stdin.
+pub struct Stage {
+    pub tool: Tool,
+    pub args: Vec<String>,
+}
+
+impl Stage {
+    pub fn new(tool: &Tool, args: Vec<String>) -> Self {
+        Self {
+            tool: tool.clone(),
+            args,
+        }
+    }
+}
+
+/// The part of a log worth quoting when a job fails: from the first error on,
+/// since everything here stops at the first one and what follows it is the
+/// detail, the hint and the statement. The last lines alone would often be
+/// another process complaining that its pipe closed.
+fn last_words(log: &[String]) -> String {
+    let from = log
+        .iter()
+        .position(|l| l.contains("ERROR:") || l.contains("FATAL:") || l.contains("error:"))
+        .unwrap_or(log.len().saturating_sub(4));
+    log[from..].iter().take(6).cloned().collect::<Vec<_>>().join("\n")
+}
+
+/// Waits for every stage and says what went wrong, if anything did. When more
+/// than one failed the last is the one reported: a stage that dies takes the
+/// ones feeding it down with a broken pipe, never the other way round.
+async fn wait_all(kind: &str, children: &mut [Child]) -> (JobState, Option<String>) {
+    let mut failure = None;
+    for child in children.iter_mut() {
+        match child.wait().await {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                let code = s.code().map(|c| c.to_string()).unwrap_or_else(|| "unknown".into());
+                failure = Some(format!("{kind} exited with status {code}"));
+            }
+            Err(e) => failure = Some(e.to_string()),
+        }
+    }
+    match failure {
+        None => (JobState::Done, None),
+        some => (JobState::Failed, some),
+    }
+}
+
+/// Spawns the stages and streams their stderr into the job record. Returns the
+/// job id straight away; the frontend polls for the rest.
 pub async fn spawn(
     jobs: Arc<Jobs>,
     kind: &'static str,
-    tool: &Tool,
-    args: Vec<String>,
+    stages: Vec<Stage>,
     env: Vec<(String, String)>,
     file: Option<String>,
     watch_file: bool,
@@ -485,16 +735,31 @@ pub async fn spawn(
     let id = uuid::Uuid::new_v4().to_string();
     let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
 
-    let mut cmd = Command::new(&tool.path);
-    cmd.args(&args)
-        .envs(env)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| AppError::msg(format!("Could not run {}: {e}", tool.path)))?;
+    let mut children: Vec<Child> = Vec::new();
+    let mut feed: Option<Stdio> = None;
+    let last = stages.len().saturating_sub(1);
+    for (i, stage) in stages.iter().enumerate() {
+        let could_not = |e: std::io::Error| AppError::msg(format!("Could not run {}: {e}", stage.tool.path));
+        // Scoped to the iteration on purpose: a Command keeps the pipe end it
+        // was given, and while this process holds one the stage upstream never
+        // learns that its reader has gone.
+        let mut cmd = Command::new(&stage.tool.path);
+        cmd.args(&stage.args)
+            .envs(env.iter().cloned())
+            .stdin(feed.take().unwrap_or_else(Stdio::null))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(could_not)?;
+        if i < last {
+            let out = child
+                .stdout
+                .take()
+                .ok_or_else(|| AppError::msg("A stage has no output to pass on."))?;
+            feed = Some(out.try_into().map_err(could_not)?);
+        }
+        children.push(child);
+    }
 
     jobs.sweep();
     jobs.with(|m| {
@@ -514,29 +779,16 @@ pub async fn spawn(
         )
     });
 
-    let stderr = child.stderr.take();
-    let stdout = child.stdout.take();
     let job_id = id.clone();
     let watched = file.clone();
 
-    tokio::spawn(async move {
-        let push = |line: String| {
-            jobs.with(|m| {
-                if let Some(j) = m.get_mut(&job_id) {
-                    if j.log.len() >= LOG_CAPACITY {
-                        j.log.remove(0);
-                    }
-                    j.log.push(line);
-                }
-            });
-        };
-
-        // Both streams, because psql writes its errors to stderr but pg_dump
-        // in plain format can write the archive to stdout.
-        if let Some(err) = stderr {
+    // Every stage's stderr, because that is where all of these tools talk.
+    let mut readers = Vec::new();
+    for child in children.iter_mut() {
+        if let Some(err) = child.stderr.take() {
             let jobs2 = jobs.clone();
             let id2 = job_id.clone();
-            tokio::spawn(async move {
+            readers.push(tokio::spawn(async move {
                 let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     jobs2.with(|m| {
@@ -548,15 +800,19 @@ pub async fn spawn(
                         }
                     });
                 }
-            });
+            }));
         }
-        if let Some(out) = stdout {
-            tokio::spawn(async move {
-                let mut lines = BufReader::new(out).lines();
-                while (lines.next_line().await).unwrap_or(None).is_some() {}
-            });
-        }
+    }
+    // The last stdout is drained and dropped: nothing reads it, and a tool
+    // blocked on a full pipe would never finish.
+    if let Some(out) = children.last_mut().and_then(|c| c.stdout.take()) {
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(out).lines();
+            while (lines.next_line().await).unwrap_or(None).is_some() {}
+        });
+    }
 
+    tokio::spawn(async move {
         // While it runs, report how large the output has grown.
         let ticker = if watch_file {
             watched.clone().map(|path| {
@@ -585,16 +841,20 @@ pub async fn spawn(
         };
 
         let outcome = tokio::select! {
-            status = child.wait() => match status {
-                Ok(s) if s.success() => (JobState::Done, None),
-                Ok(s) => (JobState::Failed, Some(format!("{kind} exited with status {}", s.code().map(|c| c.to_string()).unwrap_or_else(|| "unknown".into())))),
-                Err(e) => (JobState::Failed, Some(e.to_string())),
-            },
-            _ = &mut cancel_rx => {
-                let _ = child.kill().await;
-                (JobState::Cancelled, None)
-            }
+            outcome = wait_all(kind, &mut children) => outcome,
+            _ = &mut cancel_rx => (JobState::Cancelled, None),
         };
+        if outcome.0 == JobState::Cancelled {
+            for child in children.iter_mut() {
+                let _ = child.kill().await;
+            }
+        }
+
+        // A process can be gone before its last lines have been read, and
+        // those are the ones that say why.
+        for reader in readers {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), reader).await;
+        }
 
         // Walked, not stat-ed: a directory's own metadata reports the size of
         // the inode, not of what is inside it.
@@ -607,13 +867,12 @@ pub async fn spawn(
                     j.bytes = b;
                 }
                 if let Some(e) = outcome.1 {
-                    // The tool's own last words say far more than an exit code.
-                    let tail = j.log.iter().rev().take(4).rev().cloned().collect::<Vec<_>>().join("\n");
-                    j.error = Some(if tail.is_empty() { e } else { format!("{e}\n{tail}") });
+                    // The tool's own words say far more than an exit code.
+                    let said = last_words(&j.log);
+                    j.error = Some(if said.is_empty() { e } else { format!("{e}\n{said}") });
                 }
             }
         });
-        let _ = push;
         if let Some(t) = ticker {
             t.abort();
         }
@@ -796,17 +1055,124 @@ mod tests {
     }
 
     #[test]
-    fn cleaning_is_only_requested_when_asked_for() {
+    fn replacing_never_reaches_for_pg_restores_own_clean() {
+        // --clean drops the archive's objects one at a time without CASCADE,
+        // so one foreign key the backup has never heard of fails the restore.
         let o = RestoreOptions {
-            clean: false,
+            clean: true,
             no_owner: true,
-            single_transaction: false,
+            single_transaction: true,
             jobs: 0,
         };
-        assert!(!restore_args("shop", Path::new("/x"), &o, false).contains(&"--clean".to_string()));
-        let o = RestoreOptions { clean: true, ..o };
-        let a = restore_args("shop", Path::new("/x"), &o, false);
-        assert!(a.contains(&"--clean".to_string()) && a.contains(&"--if-exists".to_string()));
+        for args in [
+            restore_args("shop", Path::new("/x"), &o, false),
+            script_args(Path::new("/x"), &o),
+        ] {
+            assert!(!args.contains(&"--clean".to_string()), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn the_script_ends_in_a_commit_only_pg_restore_can_write() {
+        let o = RestoreOptions {
+            clean: true,
+            no_owner: false,
+            single_transaction: true,
+            jobs: 0,
+        };
+        let a = script_args(Path::new("/tmp/x.dump"), &o);
+        assert_eq!(&a[..2], ["--file", "-"], "the script goes to stdout, for psql");
+        assert!(
+            a.contains(&"--single-transaction".to_string()),
+            "without it the script has no COMMIT, and a truncated one would be applied as far as it got"
+        );
+        assert!(
+            !a.contains(&"--dbname".to_string()),
+            "it must not connect and apply the archive itself"
+        );
+        assert!(!a.contains(&"--no-owner".to_string()));
+
+        let a = apply_args("shop", "BEGIN; DROP SCHEMA \"public\" CASCADE");
+        let first = a.iter().position(|x| x == "--command").unwrap();
+        let stdin = a.iter().position(|x| x == "--file").unwrap();
+        assert!(
+            first < stdin,
+            "the emptying has to run before the script, in the same session"
+        );
+        assert_eq!(a[stdin + 1], "-");
+        assert!(a.contains(&"ON_ERROR_STOP=1".to_string()));
+        assert!(a.contains(&"--no-psqlrc".to_string()));
+    }
+
+    const LISTING: &str = "\
+;
+; Archive created at 2026-11-10 19:25:01 -03
+;     dbname: shop
+;
+; Selected TOC Entries:
+;
+7; 2615 16517 SCHEMA - analytics fivedb
+2; 3079 16385 EXTENSION - pgcrypto 
+3630; 0 0 COMMENT - EXTENSION pgcrypto 
+949; 1247 16423 TYPE public order_status fivedb
+283; 1259 16518 TABLE analytics daily_visits fivedb
+3631; 0 0 COMMENT public TABLE customers fivedb
+3632; 0 0 SEQUENCE OWNED BY public customers_id_seq fivedb
+282; 1259 16506 MATERIALIZED VIEW public sales_by_status fivedb
+3623; 0 16518 TABLE DATA analytics daily_visits fivedb
+3635; 0 0 SEQUENCE SET public customers_id_seq fivedb
+3466; 2606 16486 FK CONSTRAINT public order_items order_items_order_id_fkey fivedb
+3625; 0 16506 MATERIALIZED VIEW DATA public sales_by_status fivedb
+";
+
+    #[test]
+    fn a_listing_names_the_schemas_an_archive_fills() {
+        let l = read_listing(LISTING);
+        assert_eq!(l.schemas, ["analytics", "public"]);
+        assert!(l.has_structure);
+    }
+
+    #[test]
+    fn a_schema_is_not_mistaken_for_part_of_the_kind() {
+        // Kinds are upper-case words and so is this schema. Nor is the table
+        // called `public` a schema, or the object a comment is about.
+        let l = read_listing(
+            "5; 1259 1 TABLE PROD public fivedb\n6; 0 1 TABLE DATA PROD public fivedb\n7; 0 0 COMMENT - SCHEMA other fivedb\n",
+        );
+        assert_eq!(l.schemas, ["PROD"]);
+    }
+
+    #[test]
+    fn a_data_only_archive_is_recognised_as_having_no_structure() {
+        let l = read_listing(
+            "3600; 0 0 ENCODING - ENCODING \n3601; 0 0 STDSTRINGS - STDSTRINGS \n3602; 0 0 SEARCHPATH - SEARCHPATH \n\
+             3615; 0 16434 TABLE DATA public customers fivedb\n3635; 0 0 SEQUENCE SET public customers_id_seq fivedb\n",
+        );
+        assert!(
+            !l.has_structure,
+            "emptying the target for this one would leave the rows nowhere to go"
+        );
+        assert_eq!(l.schemas, ["public"]);
+    }
+
+    #[test]
+    fn a_failure_is_quoted_from_its_first_error() {
+        let log: Vec<String> = [
+            "pg_restore: creating TABLE \"public.orders\"",
+            "psql:<stdin>:40: ERROR:  relation \"orders\" already exists",
+            "DETAIL:  something",
+            "pg_restore: creating TABLE \"public.products\"",
+            "pg_restore: error: could not write to output file: Broken pipe",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let said = last_words(&log);
+        assert!(said.starts_with("psql:<stdin>:40: ERROR:"), "{said}");
+
+        // Nothing marked as an error: fall back to the end of the log.
+        let quiet: Vec<String> = (0..10).map(|i| format!("line {i}")).collect();
+        assert_eq!(last_words(&quiet), "line 6\nline 7\nline 8\nline 9");
     }
 
     /// Writes a script that answers `--version` like the real thing.

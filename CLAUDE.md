@@ -114,13 +114,24 @@ keyed by primary key or, when there is none, by `ctid`.
   each item and asks whenever an unrecognised binary reads one, so a item per
   connection per field meant a prompt per field after every rebuild. Everything
   is folded into `connection-secrets` and cached for the run. Never split it
-  back up. The keychain tests share that item, so they take a mutex.
+  back up. The keychain tests use a service of their own, never the real one,
+  and share its one item, so they take a mutex.
 - **Backups shell out.** `pg_dump` and `pg_restore` are not bundled; `dump.rs`
   finds them and refuses a tool older than the server, because that is the one
   combination that silently produces an unusable dump. Connection details reach
   them through the environment only — a password in `argv` is readable by every
   process on the machine — and the config passed in is the one `effective()`
   returns, so a tunnelled connection is dumped through its tunnel.
+- **Never pass `--clean` to `pg_restore`.** It drops only what the archive
+  lists, object by object and without CASCADE, so a target holding one foreign
+  key the backup has never seen fails the whole restore — and a target that ran
+  one migration more than its source always does. Replacing means dropping the
+  schemas the archive fills (`dump::read_listing`, `pg::replacing`). With one
+  transaction that has to happen inside it, which pg_restore cannot do: it
+  writes the script and psql applies it behind our statements. The script's
+  COMMIT is pg_restore's own, on purpose — only a script written to the end has
+  one, so a truncated archive rolls back instead of being applied as far as it
+  got.
 - **`russh` pulls `aws-lc-sys`**, which needs NASM on Windows and CMake
   everywhere. That is why the release workflow has those steps.
 - **The updater signing key cannot be replaced.** The public half is in

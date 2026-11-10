@@ -465,8 +465,7 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
             let id = dump::spawn(
                 state.jobs.clone(),
                 "dump",
-                &tool,
-                args,
+                vec![dump::Stage::new(&tool, args)],
                 dump::env_for(&cfg),
                 Some(target.display().to_string()),
                 true,
@@ -488,28 +487,73 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
             let plain = params["plain"].as_bool().unwrap_or(false);
 
             let name = if plain { "psql" } else { "pg_restore" };
-            let tool = dump::find_tool(name).ok_or_else(|| {
-                AppError::msg(format!(
-                    "{name} was not found on this machine. Install the PostgreSQL client tools."
-                ))
-            })?;
-            dump::check_version(&tool, state.server_major(&connection_id, database.as_deref()).await?)?;
+            let find = |name: &str| {
+                dump::find_tool(name).ok_or_else(|| {
+                    AppError::msg(format!(
+                        "{name} was not found on this machine. Install the PostgreSQL client tools."
+                    ))
+                })
+            };
+            let tool = find(name)?;
+            let major = state.server_major(&connection_id, database.as_deref()).await?;
+            dump::check_version(&tool, major)?;
 
             let session = state.pg(&connection_id, database.as_deref()).await?;
             let target_db = session.database.clone();
             let cfg = state.effective(state.store.get_connection(&connection_id)?).await?;
-            let args = dump::restore_args(&target_db, &source, &options, plain);
+
+            let mut replaced: Vec<String> = Vec::new();
+            let stages = if options.clean {
+                if plain {
+                    return Err(AppError::msg(
+                        "A plain SQL backup cannot say what it contains, so there is no telling what to replace. Restore it into a new database, or turn replacing off.",
+                    ));
+                }
+                let listing = dump::list_archive(&tool, &source).await?;
+                if !listing.has_structure {
+                    return Err(AppError::msg(
+                        "This backup carries rows only, so emptying the target would leave them nowhere to go. Turn replacing off to load them into the tables that are there.",
+                    ));
+                }
+                let statements = pg::replacing(&cfg, &target_db, &listing.schemas).await?;
+                replaced = listing.schemas;
+                if options.single_transaction {
+                    // Emptying and restoring have to be one transaction or a
+                    // failed restore leaves an empty database behind, and only
+                    // psql can be handed both.
+                    let psql = find("psql")?;
+                    dump::check_version(&psql, major)?;
+                    let mut first = vec!["BEGIN".to_string(), pg::OPENING.to_string()];
+                    first.extend(statements);
+                    vec![
+                        dump::Stage::new(&tool, dump::script_args(&source, &options)),
+                        dump::Stage::new(&psql, dump::apply_args(&target_db, &first.join("; "))),
+                    ]
+                } else {
+                    pg::run_atomically(&cfg, &target_db, &statements).await?;
+                    vec![dump::Stage::new(
+                        &tool,
+                        dump::restore_args(&target_db, &source, &options, plain),
+                    )]
+                }
+            } else {
+                vec![dump::Stage::new(
+                    &tool,
+                    dump::restore_args(&target_db, &source, &options, plain),
+                )]
+            };
             let id = dump::spawn(
                 state.jobs.clone(),
                 "restore",
-                &tool,
-                args,
+                stages,
                 dump::env_for(&cfg),
                 Some(source.display().to_string()),
                 false,
             )
             .await?;
-            Ok(json!({ "id": id, "tool": tool.path, "version": tool.version, "database": target_db }))
+            Ok(
+                json!({ "id": id, "tool": tool.path, "version": tool.version, "database": target_db, "replaced": replaced }),
+            )
         }
         "dump.status" => {
             let id: String = p(&params["id"])?;

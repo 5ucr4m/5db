@@ -694,7 +694,10 @@ async fn pg_statement_timeout_is_enforced() {
 #[tokio::test]
 async fn secrets_never_reach_the_database_file() {
     let dir = std::env::temp_dir().join(format!("5db-vault-{}", uuid_like()));
-    let s = AppState::new_with(dir.clone(), Vault::open()).expect("store");
+    // The real keychain backend, but never the real item: that one holds the
+    // developer's own passwords, and reading it from a freshly built test
+    // binary stops the run on an authorisation dialog.
+    let s = AppState::new_with(dir.clone(), Vault::scratch("ai.leve.fivedb.tests.integration")).expect("store");
     if s.store.secrets_backend() != Backend::Keychain {
         // No keychain on this machine (CI): the fallback is covered by the unit
         // tests, and there is nothing to assert about the file here.
@@ -993,6 +996,262 @@ async fn dump_and_restore_moves_a_database_to_another_target() {
     })
     .await;
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One statement against one database, returning the first cell.
+async fn scalar(s: &AppState, conn: &str, database: &str, sql: &str) -> String {
+    let out = call(
+        s,
+        "pg.execute",
+        json!({ "connectionId": conn, "database": database, "sql": sql, "record": false }),
+    )
+    .await;
+    out["results"][0]["rows"][0][0].as_str().unwrap_or_default().to_string()
+}
+
+/// A fresh database holding a restored copy of the fixture, and the archive it
+/// came from. The caller drops both.
+async fn restored_copy(s: &AppState, conn: &str, name: &str) -> (String, std::path::PathBuf) {
+    let target_db = format!("{name}_{}", std::process::id());
+    scalar(
+        s,
+        conn,
+        "postgres",
+        &format!("DROP DATABASE IF EXISTS \"{target_db}\" WITH (FORCE)"),
+    )
+    .await;
+    scalar(s, conn, "postgres", &format!("CREATE DATABASE \"{target_db}\"")).await;
+
+    let dir = std::env::temp_dir().join(format!("5db-dump-{}", uuid_like()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("shop.dump");
+    let started = call(
+        s,
+        "dump.start",
+        json!({ "connectionId": conn, "database": "shop", "path": archive.display().to_string(),
+                "options": { "content": "all", "format": "custom" } }),
+    )
+    .await;
+    let job = finish_job(s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "dump failed: {}", job["error"]);
+
+    let started = call(
+        s,
+        "restore.start",
+        json!({ "connectionId": conn, "database": target_db, "path": archive.display().to_string(),
+                "plain": false, "options": { "singleTransaction": true } }),
+    )
+    .await;
+    let job = finish_job(s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "restore failed: {}", job["error"]);
+    (target_db, archive)
+}
+
+/// What a target looks like after it has lived a little: a table the backup
+/// has never heard of, holding a foreign key onto one it has. That key is what
+/// `pg_restore --clean` cannot get past.
+const DRIFT: &str = "CREATE TABLE drift (id serial PRIMARY KEY, customer_id bigint REFERENCES customers(id));
+                     INSERT INTO drift (customer_id) SELECT id FROM customers LIMIT 3;
+                     ALTER TABLE orders ADD COLUMN added_later text";
+
+#[tokio::test]
+async fn a_restore_replaces_a_target_that_has_drifted_from_the_backup() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    let (target_db, archive) = restored_copy(&s, &conn, "shop_drifted").await;
+    scalar(
+        &s,
+        &conn,
+        &target_db,
+        "CREATE SCHEMA untouched; CREATE TABLE untouched.keep (id int)",
+    )
+    .await;
+    // The census counts every schema, so the one the backup leaves alone shows.
+    let mut expected = census(&s, &conn, "shop").await;
+    expected["tables"] = json!(expected["tables"].as_i64().unwrap() + 1);
+
+    // Once in one transaction, through psql; once without, straight in.
+    for single in [true, false] {
+        scalar(&s, &conn, &target_db, DRIFT).await;
+        let started = call(
+            &s,
+            "restore.start",
+            json!({ "connectionId": conn, "database": target_db, "path": archive.display().to_string(),
+                    "plain": false, "options": { "clean": true, "singleTransaction": single } }),
+        )
+        .await;
+        let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+        assert_eq!(
+            job["state"], "done",
+            "replacing (single transaction: {single}) failed: {}",
+            job["error"]
+        );
+        assert!(
+            started["replaced"].as_array().unwrap().contains(&json!("public")),
+            "the answer should say what was emptied: {started}"
+        );
+
+        assert_eq!(
+            census(&s, &conn, &target_db).await,
+            expected,
+            "single transaction: {single}"
+        );
+        let leftovers = scalar(
+            &s,
+            &conn,
+            &target_db,
+            "SELECT (SELECT count(*) FROM pg_tables WHERE tablename = 'drift')
+                  + (SELECT count(*) FROM information_schema.columns WHERE column_name = 'added_later')",
+        )
+        .await;
+        assert_eq!(leftovers, "0", "what the backup does not have should be gone");
+        assert_eq!(
+            scalar(
+                &s,
+                &conn,
+                &target_db,
+                "SELECT count(*) FROM pg_tables WHERE schemaname = 'untouched'"
+            )
+            .await,
+            "1",
+            "a schema the backup never touches is not its to empty"
+        );
+        assert_eq!(
+            scalar(
+                &s,
+                &conn,
+                &target_db,
+                "SELECT has_schema_privilege('public', 'public', 'USAGE')::text"
+            )
+            .await,
+            "true",
+            "public has to come back usable, since no backup recreates it"
+        );
+    }
+
+    scalar(
+        &s,
+        &conn,
+        "postgres",
+        &format!("DROP DATABASE IF EXISTS \"{target_db}\" WITH (FORCE)"),
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(archive.parent().unwrap());
+}
+
+#[tokio::test]
+async fn a_replacing_restore_that_fails_leaves_the_target_as_it_was() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    let (target_db, archive) = restored_copy(&s, &conn, "shop_kept").await;
+    scalar(&s, &conn, &target_db, DRIFT).await;
+    let before = census(&s, &conn, &target_db).await;
+
+    // An archive that breaks off partway through its data: the table of
+    // contents reads fine, so everything up to the emptying goes ahead.
+    let bytes = std::fs::read(&archive).unwrap();
+    let cut = archive.with_file_name("cut.dump");
+    std::fs::write(&cut, &bytes[..bytes.len() * 3 / 5]).unwrap();
+
+    let started = call(
+        &s,
+        "restore.start",
+        json!({ "connectionId": conn, "database": target_db, "path": cut.display().to_string(),
+                "plain": false, "options": { "clean": true, "singleTransaction": true } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "failed", "a truncated archive cannot restore: {job}");
+    assert!(
+        job["error"].as_str().unwrap().contains("end of file"),
+        "the failure should be quoted from the tool that hit it: {}",
+        job["error"]
+    );
+
+    assert_eq!(
+        census(&s, &conn, &target_db).await,
+        before,
+        "the emptying was not rolled back"
+    );
+    assert_eq!(
+        scalar(&s, &conn, &target_db, "SELECT count(*) FROM drift").await,
+        "3",
+        "all or nothing has to cover what was there before, not only the restore"
+    );
+
+    scalar(
+        &s,
+        &conn,
+        "postgres",
+        &format!("DROP DATABASE IF EXISTS \"{target_db}\" WITH (FORCE)"),
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(archive.parent().unwrap());
+}
+
+#[tokio::test]
+async fn replacing_is_refused_when_the_backup_cannot_fill_what_it_empties() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    let (target_db, archive) = restored_copy(&s, &conn, "shop_refused").await;
+    let before = census(&s, &conn, &target_db).await;
+
+    let rows_only = archive.with_file_name("rows.dump");
+    let started = call(
+        &s,
+        "dump.start",
+        json!({ "connectionId": conn, "database": "shop", "path": rows_only.display().to_string(),
+                "options": { "content": "data", "format": "custom" } }),
+    )
+    .await;
+    assert_eq!(finish_job(&s, started["id"].as_str().unwrap()).await["state"], "done");
+
+    let err = dispatch(
+        &s,
+        "restore.start",
+        json!({ "connectionId": conn, "database": target_db, "path": rows_only.display().to_string(),
+                "plain": false, "options": { "clean": true } }),
+    )
+    .await
+    .expect_err("emptying a target for a backup with no tables in it destroys it for nothing");
+    assert!(err.message.contains("rows only"), "{}", err.message);
+
+    // A script has no table of contents, so there is no knowing what it holds.
+    let script = archive.with_file_name("shop.sql");
+    std::fs::write(&script, "SELECT 1;\n").unwrap();
+    let err = dispatch(
+        &s,
+        "restore.start",
+        json!({ "connectionId": conn, "database": target_db, "path": script.display().to_string(),
+                "plain": true, "options": { "clean": true } }),
+    )
+    .await
+    .expect_err("a plain script cannot be replaced by");
+    assert!(err.message.contains("plain SQL"), "{}", err.message);
+
+    assert_eq!(
+        census(&s, &conn, &target_db).await,
+        before,
+        "a refusal must not have touched anything"
+    );
+
+    scalar(
+        &s,
+        &conn,
+        "postgres",
+        &format!("DROP DATABASE IF EXISTS \"{target_db}\" WITH (FORCE)"),
+    )
+    .await;
+    let _ = std::fs::remove_dir_all(archive.parent().unwrap());
 }
 
 #[tokio::test]

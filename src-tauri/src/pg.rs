@@ -1294,6 +1294,84 @@ pub async fn analyze(cfg: &ConnectionConfig, database: &str) -> AppResult<Value>
     }))
 }
 
+/// The statements that empty a target of everything a backup is about to put
+/// back: each of the named schemas that exists there, dropped whole.
+///
+/// Whole, because the alternative — dropping the backup's objects one by one,
+/// which is what `pg_restore --clean` does — fails as soon as the target holds
+/// anything the backup does not know about, and a target that has run one
+/// migration more than its source always does. Schemas the backup never
+/// touches are left alone, so a partial backup does not cost the rest.
+pub async fn replacing(cfg: &ConnectionConfig, database: &str, schemas: &[String]) -> AppResult<Vec<String>> {
+    let conn = connect(cfg, database).await?;
+    let rows = conn
+        .client
+        .query(
+            "SELECT n.nspname, e.extname
+             FROM pg_namespace n
+             LEFT JOIN pg_depend d ON d.classid = 'pg_namespace'::regclass AND d.objid = n.oid AND d.deptype = 'e'
+             LEFT JOIN pg_extension e ON e.oid = d.refobjid
+             WHERE n.nspname = ANY($1) AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+             ORDER BY n.nspname",
+            &[&schemas],
+        )
+        .await?;
+    let version: i32 = conn
+        .client
+        .query_one("SELECT current_setting('server_version_num')::int", &[])
+        .await?
+        .get(0);
+
+    let mut out = Vec::new();
+    let mut public = false;
+    for row in &rows {
+        let schema: String = row.get(0);
+        match row.get::<_, Option<String>>(1) {
+            // A schema an extension made cannot be dropped from under it; the
+            // extension goes, and the backup's own CREATE EXTENSION returns it.
+            Some(extension) => out.push(format!("DROP EXTENSION IF EXISTS {} CASCADE", quote_ident(&extension))),
+            None => {
+                out.push(format!("DROP SCHEMA IF EXISTS {} CASCADE", quote_ident(&schema)));
+                public |= schema == "public";
+            }
+        }
+    }
+    // No backup recreates `public`: pg_dump assumes every database has one. It
+    // is put back the way this server's initdb would have made it.
+    if public {
+        out.push("CREATE SCHEMA public".into());
+        out.push("COMMENT ON SCHEMA public IS 'standard public schema'".into());
+        if version >= 150_000 {
+            out.push("GRANT USAGE ON SCHEMA public TO PUBLIC".into());
+            // Only its owner or a superuser may hand it over; anyone else keeps
+            // it, which changes nothing they could not already do.
+            out.push(
+                "DO $$ BEGIN ALTER SCHEMA public OWNER TO pg_database_owner; EXCEPTION WHEN OTHERS THEN NULL; END $$"
+                    .into(),
+            );
+        } else {
+            out.push("GRANT ALL ON SCHEMA public TO PUBLIC".into());
+        }
+    }
+    Ok(out)
+}
+
+/// Runs statements as one transaction on a connection of its own, with no
+/// timeout: dropping a large schema is slow, and half-dropped is not a state.
+pub async fn run_atomically(cfg: &ConnectionConfig, database: &str, statements: &[String]) -> AppResult<()> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+    let conn = connect(cfg, database).await?;
+    let sql = format!("BEGIN; {}; {}; COMMIT", OPENING, statements.join("; "));
+    conn.client.batch_execute(&sql).await?;
+    Ok(())
+}
+
+/// What a long piece of maintenance sets before anything else, so neither the
+/// role's nor the server's default cuts it off.
+pub const OPENING: &str = "SET statement_timeout = 0; SET lock_timeout = 0";
+
 /// What this server will and will not allow, so the scheduling and sync
 /// features can pick a mode instead of guessing and failing later.
 ///
