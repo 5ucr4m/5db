@@ -80,6 +80,9 @@ enum Known {
 
 pub struct Vault {
     backend: Backend,
+    /// The keychain service the item lives under. Always `SERVICE` in the app;
+    /// a test names its own, see `scratch`.
+    service: &'static str,
     /// Read from the keychain once per run. Without this every listing would
     /// reach for the keychain again, and on a machine where the item needs
     /// authorising that is a prompt each time.
@@ -93,6 +96,7 @@ impl Vault {
     pub fn file() -> Self {
         Vault {
             backend: Backend::File,
+            service: SERVICE,
             cache: Mutex::new(Known::Unread),
         }
     }
@@ -103,8 +107,30 @@ impl Vault {
         if std::env::var("FIVEDB_SECRETS").as_deref() == Ok("file") {
             return Vault::file();
         }
+        Vault::open_in(SERVICE)
+    }
+
+    /// A keychain vault for a test, under a service of its own and starting
+    /// from nothing.
+    ///
+    /// The tests used to share the real service. That put the developer's
+    /// actual passwords one failed assertion away from a test, and it hung
+    /// every run on an authorisation dialog: macOS asks whenever a binary it
+    /// has not seen reads an item, and a test binary is a new one after each
+    /// build. An item the same run creates and removes never asks — hence the
+    /// delete first, which needs no authorisation and clears what a run that
+    /// died halfway left behind.
+    pub fn scratch(service: &'static str) -> Self {
+        assert_ne!(service, SERVICE, "a scratch vault must never be the real one");
+        if let Ok(e) = Entry::new(service, ACCOUNT) {
+            let _ = e.delete_credential();
+        }
+        Vault::open_in(service)
+    }
+
+    fn open_in(service: &'static str) -> Self {
         let probe = || -> Result<(), KeyringError> {
-            let e = Entry::new(SERVICE, "probe")?;
+            let e = Entry::new(service, "probe")?;
             e.set_password("probe")?;
             let got = e.get_password()?;
             let _ = e.delete_credential();
@@ -118,6 +144,7 @@ impl Vault {
             Ok(()) => {
                 let v = Vault {
                     backend: Backend::Keychain,
+                    service,
                     cache: Mutex::new(Known::Unread),
                 };
                 v.absorb_legacy_items();
@@ -134,8 +161,8 @@ impl Vault {
         self.backend
     }
 
-    fn entry() -> Result<Entry, KeyringError> {
-        Entry::new(SERVICE, ACCOUNT)
+    fn entry(&self) -> Result<Entry, KeyringError> {
+        Entry::new(self.service, ACCOUNT)
     }
 
     /// The whole map, read from the keychain at most once per run. `None` when
@@ -147,7 +174,7 @@ impl Vault {
             Known::Unavailable => return None,
             Known::Unread => {}
         }
-        let loaded = match Self::entry().and_then(|e| e.get_password()) {
+        let loaded = match self.entry().and_then(|e| e.get_password()) {
             Ok(json) => match serde_json::from_str::<HashMap<String, String>>(&json) {
                 Ok(m) => m,
                 Err(e) => {
@@ -191,7 +218,7 @@ impl Vault {
             Ok(j) => j,
             Err(_) => return false,
         };
-        let written = Self::entry().and_then(|e| {
+        let written = self.entry().and_then(|e| {
             if map.is_empty() {
                 // Only reached when the map was read and really is empty now.
                 match e.delete_credential() {
@@ -245,7 +272,7 @@ impl Vault {
             if map.contains_key(&account) {
                 continue;
             }
-            if let Ok(e) = Entry::new(SERVICE, &account)
+            if let Ok(e) = Entry::new(self.service, &account)
                 && let Ok(value) = e.get_password()
             {
                 map.insert(account, value);
@@ -351,6 +378,12 @@ mod tests {
     /// resource, so they have to take turns.
     pub(super) static KEYCHAIN: Mutex<()> = Mutex::new(());
 
+    pub(super) const SERVICE: &str = "ai.leve.fivedb.tests";
+
+    pub(super) fn open() -> Vault {
+        Vault::scratch(SERVICE)
+    }
+
     fn cfg(id: &str) -> ConnectionConfig {
         ConnectionConfig {
             id: id.into(),
@@ -373,7 +406,7 @@ mod tests {
     #[test]
     fn keychain_round_trip() {
         let _guard = KEYCHAIN.lock().unwrap_or_else(|e| e.into_inner());
-        let vault = Vault::open();
+        let vault = open();
         if vault.backend() != Backend::Keychain {
             // No Secret Service here, which is the case in CI; the file path is
             // covered above.
@@ -414,8 +447,8 @@ mod tests {
 
 #[cfg(test)]
 mod one_item_tests {
-    use super::tests::KEYCHAIN;
-    use super::*;
+    use super::tests::{KEYCHAIN, SERVICE};
+    use super::{ACCOUNT, Backend, ConnectionConfig, Entry, HashMap};
 
     /// Everything a connection can hide, in one place.
     fn cfg(id: &str) -> ConnectionConfig {
@@ -431,7 +464,7 @@ mod one_item_tests {
     #[test]
     fn the_keychain_holds_one_item_for_every_connection() {
         let _guard = KEYCHAIN.lock().unwrap_or_else(|e| e.into_inner());
-        let vault = Vault::open();
+        let vault = super::tests::open();
         if vault.backend() != Backend::Keychain {
             return; // No Secret Service here; the file path is covered elsewhere.
         }
@@ -439,7 +472,6 @@ mod one_item_tests {
         let a = format!("{tag}-a");
         let b = format!("{tag}-b");
 
-        // Whatever is already stored belongs to the developer; keep it intact.
         let before = vault.map();
 
         let row_a = vault.store(&cfg(&a));
@@ -473,14 +505,13 @@ mod one_item_tests {
         vault.load(&mut gone);
         assert_eq!(gone.password, "", "forget removes every field of that connection");
 
-        // The developer's own secrets are exactly as they were.
-        assert_eq!(vault.map(), before, "the test must leave the real item untouched");
+        assert_eq!(vault.map(), before, "nothing of the test's may be left behind");
     }
 
     #[test]
     fn secrets_written_by_an_older_build_are_folded_in_and_the_old_items_removed() {
         let _guard = KEYCHAIN.lock().unwrap_or_else(|e| e.into_inner());
-        let vault = Vault::open();
+        let vault = super::tests::open();
         if vault.backend() != Backend::Keychain {
             return;
         }
@@ -530,6 +561,7 @@ mod unreadable_keychain {
     fn blind() -> Vault {
         Vault {
             backend: Backend::Keychain,
+            service: super::tests::SERVICE,
             cache: Mutex::new(Known::Unavailable),
         }
     }
@@ -592,6 +624,7 @@ mod unreadable_keychain {
         // store anything.
         let fresh = Vault {
             backend: Backend::Keychain,
+            service: super::tests::SERVICE,
             cache: Mutex::new(Known::Loaded(HashMap::new())),
         };
         assert_eq!(fresh.map(), Some(HashMap::new()));
