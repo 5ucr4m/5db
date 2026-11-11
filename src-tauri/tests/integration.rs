@@ -1659,3 +1659,450 @@ async fn analyze_collects_the_statistics_a_restore_leaves_behind() {
     )
     .await;
 }
+
+/// An empty database on the fixture server. The caller drops it.
+async fn empty_database(s: &AppState, conn: &str, name: &str) -> String {
+    let name = format!("{name}_{}", std::process::id());
+    scalar(
+        s,
+        conn,
+        "postgres",
+        &format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"),
+    )
+    .await;
+    scalar(s, conn, "postgres", &format!("CREATE DATABASE \"{name}\"")).await;
+    name
+}
+
+async fn drop_database(s: &AppState, conn: &str, name: &str) {
+    scalar(
+        s,
+        conn,
+        "postgres",
+        &format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"),
+    )
+    .await;
+}
+
+/// A folder for a transfer to keep its backup in, so a test can see what the
+/// transfer left there.
+fn transfer_folder(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("5db-{name}-{}", uuid_like()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn step<'a>(job: &'a Value, key: &str) -> &'a Value {
+    job["steps"]
+        .as_array()
+        .and_then(|steps| steps.iter().find(|s| s["key"] == key))
+        .unwrap_or_else(|| panic!("the job has no {key} step: {job}"))
+}
+
+#[tokio::test]
+async fn a_transfer_copies_checks_and_deletes_its_backup() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    let target_db = empty_database(&s, &conn, "shop_transferred").await;
+    let folder = transfer_folder("transfer");
+
+    let started = call(
+        &s,
+        "transfer.start",
+        json!({ "source": { "connectionId": conn, "database": "shop" },
+                "target": { "connectionId": conn, "database": target_db },
+                "folder": folder.display().to_string(),
+                "options": { "jobs": 3 } }),
+    )
+    .await;
+    assert_eq!(started["database"], target_db);
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "the transfer failed: {}", job["error"]);
+    assert_eq!(job["kind"], "transfer");
+
+    // Every step ran, in order, and says what it did.
+    let keys: Vec<&str> = job["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["dump", "restore", "verify", "analyze", "cleanup"]);
+    for key in keys {
+        assert_eq!(step(&job, key)["state"], "done", "{key} did not finish: {job}");
+    }
+    assert!(
+        job["bytes"].as_u64().unwrap() > 10_000,
+        "the backup was not measured: {job}"
+    );
+
+    // What was checked is on the record, and nothing was found wrong.
+    let report = &job["report"];
+    assert!(report["tables"].as_i64().unwrap() >= 5, "{report}");
+    assert!(report["rows"].as_i64().unwrap() > 20_000, "{report}");
+    assert_eq!(report["mismatches"], json!([]));
+
+    // The copy is the source.
+    let before = census(&s, &conn, "shop").await;
+    let after = census(&s, &conn, &target_db).await;
+    assert_eq!(before, after, "the copy differs from its source");
+
+    // The planner knows what arrived, which a restore alone does not give it.
+    let blind = scalar(
+        &s,
+        &conn,
+        &target_db,
+        "SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.reltuples = -1",
+    )
+    .await;
+    assert_eq!(blind, "0", "every table should have statistics after a transfer");
+
+    // And the backup is gone, with nothing pointing at where it was.
+    assert!(job["file"].is_null(), "a deleted backup must not be offered: {job}");
+    assert_eq!(
+        std::fs::read_dir(&folder).unwrap().count(),
+        0,
+        "the transfer left something behind in {}",
+        folder.display()
+    );
+
+    drop_database(&s, &conn, &target_db).await;
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[tokio::test]
+async fn a_transfer_only_lands_on_what_is_there_when_told_to_replace_it() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    let (target_db, archive) = restored_copy(&s, &conn, "shop_transfer_over").await;
+    let _ = std::fs::remove_dir_all(archive.parent().unwrap());
+    let folder = transfer_folder("transfer-over");
+    let params = |options: Value| {
+        json!({ "source": { "connectionId": conn, "database": "shop" },
+                "target": { "connectionId": conn, "database": target_db },
+                "folder": folder.display().to_string(),
+                "options": options })
+    };
+
+    // Refused before anything is backed up: it would only fail at the first
+    // table, and on a real database that is an hour later.
+    let err = dispatch(&s, "transfer.start", params(json!({})))
+        .await
+        .expect_err("a target that holds tables must be refused when nothing may be replaced");
+    assert!(err.message.contains("already holds"), "{}", err.message);
+    assert_eq!(
+        std::fs::read_dir(&folder).unwrap().count(),
+        0,
+        "a refused transfer must not leave a folder behind"
+    );
+
+    // The same database is not a destination for itself.
+    let err = dispatch(
+        &s,
+        "transfer.start",
+        json!({ "source": { "connectionId": conn, "database": "shop" },
+                "target": { "connectionId": conn, "database": "shop" },
+                "options": { "replace": true } }),
+    )
+    .await
+    .expect_err("copying a database onto itself must be refused");
+    assert!(err.message.contains("being copied"), "{}", err.message);
+
+    // With leave to replace, a target that has drifted is no obstacle, in one
+    // transaction or with workers.
+    for single in [true, false] {
+        scalar(&s, &conn, &target_db, DRIFT).await;
+        let started = call(
+            &s,
+            "transfer.start",
+            params(json!({ "replace": true, "singleTransaction": single, "jobs": 3 })),
+        )
+        .await;
+        let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+        assert_eq!(
+            job["state"], "done",
+            "replacing (single transaction: {single}) failed: {}",
+            job["error"]
+        );
+        assert!(
+            step(&job, "restore")["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("public"),
+            "the step should say what it replaced: {job}"
+        );
+        assert_eq!(job["report"]["mismatches"], json!([]));
+        assert_eq!(
+            census(&s, &conn, "shop").await,
+            census(&s, &conn, &target_db).await,
+            "the target should be the source again (single transaction: {single})"
+        );
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
+    }
+
+    drop_database(&s, &conn, &target_db).await;
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[tokio::test]
+async fn a_transfer_that_cannot_restore_keeps_its_backup() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    let target_db = empty_database(&s, &conn, "shop_transfer_blocked").await;
+    // Not a table, so the target passes for empty, but its name is taken.
+    scalar(&s, &conn, &target_db, "CREATE TYPE customers AS (x int)").await;
+    let folder = transfer_folder("transfer-blocked");
+
+    let started = call(
+        &s,
+        "transfer.start",
+        json!({ "source": { "connectionId": conn, "database": "shop" },
+                "target": { "connectionId": conn, "database": target_db },
+                "folder": folder.display().to_string(),
+                "options": {} }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "failed", "{job}");
+    assert!(
+        job["error"].as_str().unwrap_or_default().contains("already exists"),
+        "the failure should be quoted from the restore, not from the backup before it: {}",
+        job["error"]
+    );
+    assert_eq!(step(&job, "dump")["state"], "done");
+    assert_eq!(step(&job, "restore")["state"], "failed");
+    assert_eq!(step(&job, "verify")["state"], "pending");
+    assert_eq!(step(&job, "cleanup")["state"], "skipped");
+
+    // The backup took the time it took; it is still there to restore by hand.
+    let kept = std::path::PathBuf::from(job["file"].as_str().expect("the kept backup's path"));
+    assert!(kept.is_dir(), "{} should still exist", kept.display());
+    // Compared resolved: the temporary directory is reached through a symlink.
+    assert!(kept.starts_with(folder.canonicalize().unwrap()));
+    // One transaction, so the failed restore left nothing of its own.
+    assert_eq!(
+        scalar(
+            &s,
+            &conn,
+            &target_db,
+            "SELECT count(*)::text FROM information_schema.tables WHERE table_schema = 'public'"
+        )
+        .await,
+        "0"
+    );
+
+    // It restores, once what was in the way is gone.
+    scalar(&s, &conn, &target_db, "DROP TYPE customers").await;
+    let started = call(
+        &s,
+        "restore.start",
+        json!({ "connectionId": conn, "database": target_db, "path": kept.display().to_string(),
+                "plain": false, "options": { "singleTransaction": true } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(
+        job["state"], "done",
+        "the kept backup did not restore: {}",
+        job["error"]
+    );
+    assert_eq!(census(&s, &conn, "shop").await, census(&s, &conn, &target_db).await);
+
+    drop_database(&s, &conn, &target_db).await;
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[tokio::test]
+async fn a_cancelled_transfer_leaves_no_backup_behind() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    let target_db = empty_database(&s, &conn, "shop_transfer_cancelled").await;
+    let folder = transfer_folder("transfer-cancelled");
+
+    let started = call(
+        &s,
+        "transfer.start",
+        json!({ "source": { "connectionId": conn, "database": "shop" },
+                "target": { "connectionId": conn, "database": target_db },
+                "folder": folder.display().to_string(),
+                "options": {} }),
+    )
+    .await;
+    let id = started["id"].as_str().unwrap().to_string();
+    call(&s, "dump.cancel", json!({ "id": id })).await;
+    let job = finish_job(&s, &id).await;
+    assert_eq!(job["state"], "cancelled", "{job}");
+    assert!(job["error"].is_null(), "a cancellation is not a failure");
+    assert_eq!(step(&job, "restore")["state"], "pending");
+    // Half a backup restores nothing, so it is not kept.
+    assert_eq!(
+        std::fs::read_dir(&folder).unwrap().count(),
+        0,
+        "the unfinished backup should have been removed"
+    );
+    assert_eq!(
+        scalar(
+            &s,
+            &conn,
+            &target_db,
+            "SELECT count(*)::text FROM information_schema.tables WHERE table_schema = 'public'"
+        )
+        .await,
+        "0",
+        "nothing should have reached the target"
+    );
+
+    drop_database(&s, &conn, &target_db).await;
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[tokio::test]
+async fn a_backup_holds_what_was_counted_whatever_is_written_meanwhile() {
+    use fivedb_lib::{dump, pg, transfer};
+
+    let s = state();
+    let conn = pg_conn(&s).await;
+    if !dump_ready(&s, &conn).await {
+        return;
+    }
+    // A source of its own: the fixture is shared, and this one is written to.
+    let (source_db, archive) = restored_copy(&s, &conn, "shop_snapshot_source").await;
+    let _ = std::fs::remove_dir_all(archive.parent().unwrap());
+    let target_db = empty_database(&s, &conn, "shop_snapshot_target").await;
+    scalar(
+        &s,
+        &conn,
+        &source_db,
+        "CREATE TABLE ledger AS SELECT generate_series(1, 100) AS n",
+    )
+    .await;
+
+    let cfg = s.store.get_connection(&conn).unwrap();
+    let snapshot = pg::Snapshot::open(&cfg, &source_db).await.expect("a snapshot");
+    // The source keeps living after the snapshot is taken.
+    scalar(
+        &s,
+        &conn,
+        &source_db,
+        "INSERT INTO ledger SELECT generate_series(101, 150)",
+    )
+    .await;
+    assert_eq!(
+        scalar(&s, &conn, &source_db, "SELECT count(*)::text FROM ledger").await,
+        "150"
+    );
+    let counted = pg::count_rows(snapshot.client(), "public", "ledger").await.unwrap();
+    assert_eq!(counted, Some(100), "the count has to be as of the snapshot");
+    assert!(
+        pg::dumped_tables(snapshot.client())
+            .await
+            .unwrap()
+            .contains(&("public".to_string(), "ledger".to_string()))
+    );
+
+    // The backup, taken the way a transfer takes it, well after those rows.
+    let folder = transfer_folder("snapshot");
+    let out = folder.join("source.dumpdir");
+    let options = transfer::Options {
+        replace: false,
+        single_transaction: true,
+        no_owner: true,
+        jobs: 3,
+    };
+    let jobs = std::sync::Arc::new(dump::Jobs::default());
+    let tool = dump::find_tool("pg_dump").unwrap();
+    let id = dump::spawn(
+        jobs.clone(),
+        "dump",
+        vec![dump::Stage::new(
+            &tool,
+            transfer::dump_args(&source_db, &out, &options, &snapshot.name),
+        )],
+        dump::env_for(&cfg),
+        Some(out.display().to_string()),
+        true,
+    )
+    .await
+    .unwrap();
+    let job = loop {
+        let job = jobs.get(&id).unwrap();
+        if job["state"] != "running" {
+            break job;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    assert_eq!(job["state"], "done", "the dump failed: {}", job["error"]);
+    drop(snapshot);
+
+    let started = call(
+        &s,
+        "restore.start",
+        json!({ "connectionId": conn, "database": target_db, "path": out.display().to_string(),
+                "plain": false, "options": { "singleTransaction": true } }),
+    )
+    .await;
+    let job = finish_job(&s, started["id"].as_str().unwrap()).await;
+    assert_eq!(job["state"], "done", "the restore failed: {}", job["error"]);
+    assert_eq!(
+        scalar(&s, &conn, &target_db, "SELECT count(*)::text FROM ledger").await,
+        "100",
+        "the backup should hold exactly what was counted, not what was written after"
+    );
+
+    drop_database(&s, &conn, &source_db).await;
+    drop_database(&s, &conn, &target_db).await;
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+#[tokio::test]
+async fn a_read_only_connection_is_not_restored_into() {
+    let s = state();
+    let conn = pg_conn(&s).await;
+    let guarded = call(
+        &s,
+        "connections.save",
+        json!({ "name": "Guarded", "kind": "postgres", "host": "127.0.0.1", "port": 54329,
+                "user": "fivedb", "password": "fivedb", "database": "postgres", "sslMode": "disable",
+                "readOnly": true }),
+    )
+    .await;
+    let guarded = guarded["id"].as_str().unwrap();
+
+    // pg_restore opens its own session, where the flag the driver sets on ours
+    // means nothing, so the refusal has to come before it is started.
+    let err = dispatch(
+        &s,
+        "transfer.start",
+        json!({ "source": { "connectionId": conn, "database": "shop" },
+                "target": { "connectionId": guarded, "database": "postgres" },
+                "options": {} }),
+    )
+    .await
+    .expect_err("a transfer into a read-only connection must be refused");
+    assert!(err.message.contains("read-only"), "{}", err.message);
+
+    let here = std::env::temp_dir();
+    let err = dispatch(
+        &s,
+        "restore.start",
+        json!({ "connectionId": guarded, "database": "postgres", "path": here.display().to_string(),
+                "plain": false, "options": {} }),
+    )
+    .await
+    .expect_err("a restore into a read-only connection must be refused");
+    assert!(err.message.contains("read-only"), "{}", err.message);
+}

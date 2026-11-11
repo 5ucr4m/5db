@@ -46,6 +46,10 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 keyring = "4.2.0"
 
+# Only for asking a child process to stop before making it: see `dump::stop`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

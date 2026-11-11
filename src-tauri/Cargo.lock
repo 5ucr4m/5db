@@ -1569,6 +1569,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "keyring",
+ "libc",
  "native-tls",
  "postgres-native-tls",
  "redis",

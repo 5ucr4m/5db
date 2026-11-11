@@ -1372,6 +1372,107 @@ pub async fn run_atomically(cfg: &ConnectionConfig, database: &str, statements: 
 /// role's nor the server's default cuts it off.
 pub const OPENING: &str = "SET statement_timeout = 0; SET lock_timeout = 0";
 
+/// A read-only transaction held open so that pg_dump can be told to see the
+/// database exactly as it does (`--snapshot`).
+///
+/// That is what lets a copy be checked against a source that is still being
+/// written to: rows counted in here are the rows the backup carries, to the
+/// row, whatever has been inserted since. Counted any other way the two would
+/// only ever agree on a database nobody is using.
+pub struct Snapshot {
+    conn: PgConn,
+    cancel: CancelToken,
+    tls: MakeTlsConnector,
+    /// What `pg_dump --snapshot` takes.
+    pub name: String,
+}
+
+impl Snapshot {
+    pub async fn open(cfg: &ConnectionConfig, database: &str) -> AppResult<Self> {
+        let conn = connect(cfg, database).await?;
+        // The transaction sits idle for as long as the dump takes once the
+        // counting is done, and a server that reaps idle transactions would
+        // take the snapshot from under pg_dump's workers.
+        conn.client
+            .batch_execute(&format!(
+                "{OPENING}; SET idle_in_transaction_session_timeout = 0; SET row_security = off; \
+                 BEGIN ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+            ))
+            .await?;
+        let name: String = conn.client.query_one("SELECT pg_export_snapshot()", &[]).await?.get(0);
+        Ok(Snapshot {
+            cancel: conn.client.cancel_token(),
+            tls: tls_connector(cfg)?,
+            conn,
+            name,
+        })
+    }
+
+    pub fn client(&self) -> &Client {
+        &self.conn.client
+    }
+
+    /// Stops whatever the transaction is running. A count that nobody is
+    /// waiting for any more would otherwise scan its table to the end.
+    pub async fn interrupt(&self) {
+        let _ = self.cancel.cancel_query(self.tls.clone()).await;
+    }
+}
+
+/// The tables whose rows a dump carries: ordinary ones, outside the system
+/// schemas. An extension's tables are left out because the target gets them
+/// from CREATE EXTENSION rather than from the backup, and an unlogged table on
+/// a standby because pg_dump cannot read it there.
+pub async fn dumped_tables(c: &Client) -> AppResult<Vec<(String, String)>> {
+    let rows = c
+        .query(
+            "SELECT n.nspname, c.relname
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relkind = 'r'
+               AND (c.relpersistence = 'p' OR (c.relpersistence = 'u' AND NOT pg_is_in_recovery()))
+               AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+               AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                               WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')
+             ORDER BY 1, 2",
+            &[],
+        )
+        .await?;
+    Ok(rows.iter().map(|r| (r.get(0), r.get(1))).collect())
+}
+
+/// How many rows a table holds itself, or `None` when there is no such table.
+/// `ONLY`, because a parent's partitions and children are tables in their own
+/// right and are counted as such.
+pub async fn count_rows(c: &Client, schema: &str, table: &str) -> AppResult<Option<i64>> {
+    let sql = format!("SELECT count(*) FROM ONLY {}", qualified(schema, table));
+    match c.query_one(&sql, &[]).await {
+        Ok(row) => Ok(Some(row.get(0))),
+        Err(e) if e.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_TABLE) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// How many tables, views and sequences of the user's own a database holds,
+/// which is what a restore that replaces nothing would collide with.
+pub async fn user_relations(cfg: &ConnectionConfig, database: &str) -> AppResult<i64> {
+    let conn = connect(cfg, database).await?;
+    let row = conn
+        .client
+        .query_one(
+            "SELECT count(*)
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
+               AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+               AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                               WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid AND d.deptype = 'e')",
+            &[],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
 /// What this server will and will not allow, so the scheduling and sync
 /// features can pick a mode instead of guessing and failing later.
 ///

@@ -68,6 +68,7 @@ keyed by primary key or, when there is none, by `ctid`.
 | `src-tauri/src/store.rs` | SQLite: connections, history, saved queries, settings |
 | `src-tauri/src/secrets.rs` | the keychain vault, with a file fallback |
 | `src-tauri/src/dump.rs` | finding pg_dump/pg_restore, and running them as jobs |
+| `src-tauri/src/transfer.rs` | the one-step copy: dump, restore, compare, analyse, delete |
 | `src/store/app.ts` | the Zustand store: sessions, tabs, toasts, confirmations |
 | `src/lib/` | pure logic, and the only code with unit tests |
 | `src/components/grid/DataGrid.tsx` | the hand-written virtualized grid |
@@ -132,6 +133,20 @@ keyed by primary key or, when there is none, by `ctid`.
   COMMIT is pg_restore's own, on purpose — only a script written to the end has
   one, so a truncated archive rolls back instead of being applied as far as it
   got.
+- **A copy is checked against the backup's snapshot, not against the source
+  as it is now.** `transfer.rs` opens a `pg::Snapshot`, hands its name to
+  `pg_dump --snapshot` and counts the rows in that same transaction, which is
+  the only reason the counts can be required to match exactly on a database
+  that is still being written to. The transaction has to outlive the dump:
+  pg_dump's workers adopt the snapshot as they start. Never count the source
+  on another connection, and never loosen the comparison to make it pass.
+- **A transfer deletes its backup in two cases only**: the copy was verified,
+  or the backup was never finished. Anything in between keeps it and reports
+  the path. The folder it deletes is one it made itself (`transfer::scratch`),
+  never a path that was handed in.
+- **Stopping a job asks before it kills.** `pg_dump`'s parallel workers are
+  separate processes that only go when pg_dump is told to stop (SIGTERM); a
+  SIGKILL leaves each one copying its table to the end.
 - **`russh` pulls `aws-lc-sys`**, which needs NASM on Windows and CMake
   everywhere. That is why the release workflow has those steps.
 - **The updater signing key cannot be replaced.** The public half is in

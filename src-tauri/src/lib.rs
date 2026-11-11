@@ -6,6 +6,7 @@ pub mod rpc;
 pub mod secrets;
 pub mod ssh;
 pub mod store;
+pub mod transfer;
 
 use std::sync::Arc;
 

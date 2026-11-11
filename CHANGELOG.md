@@ -24,11 +24,23 @@ All notable changes to 5db. The format follows
   emptied first, in the same transaction as the restore when "All or nothing"
   is on, so a restore that fails still leaves the target as it was. Schemas the
   backup does not touch are left alone.
+- A connection marked read-only could still be restored into, because
+  `pg_restore` opens a session of its own. It is refused now.
+- Cancelling a parallel backup left its workers copying their tables to the
+  end. `pg_dump` is asked to stop first, which takes them with it.
 - A failed backup or restore is quoted from its first error rather than its
   last few lines, which often left out the error itself.
 
 ### Added
 
+- Copying a database to another server in one step: it is backed up to a
+  temporary folder, restored, checked and analysed, and the backup is deleted
+  once the check passes. The check counts the rows of every table on both
+  sides, with the source counted in the very snapshot the backup was taken
+  from, so the source can stay in use and the numbers still have to agree
+  exactly. A backup that was finished but never shown to have arrived is kept,
+  with its path, instead of being deleted. A target that already holds tables
+  is refused before the backup starts unless it may be replaced.
 - A finished restore explains that the result is normally smaller than its
   source, and offers to collect the planner statistics a restore does not.
 - A restore picks which database on the target server to replay into, and can

@@ -15,8 +15,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::watch;
 
 use crate::error::{AppError, AppResult};
+use crate::pg;
 use crate::store::ConnectionConfig;
 
 // ---------------------------------------------------------------------------
@@ -594,6 +596,80 @@ pub async fn list_archive(tool: &Tool, source: &Path) -> AppResult<Listing> {
     Ok(read_listing(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// The tool, as long as there is one new enough for the server.
+pub fn need(name: &str, server_major: u32) -> AppResult<Tool> {
+    let tool = find_tool(name).ok_or_else(|| {
+        AppError::msg(format!(
+            "{name} was not found on this machine. Install the PostgreSQL client tools."
+        ))
+    })?;
+    check_version(&tool, server_major)?;
+    Ok(tool)
+}
+
+/// A restore, ready to launch.
+pub struct Restore {
+    pub stages: Vec<Stage>,
+    pub tool: Tool,
+    /// The schemas that are emptied to make room, when replacing.
+    pub replaced: Vec<String>,
+}
+
+/// Works out what a restore has to run. When it replaces without a single
+/// transaction the target is emptied here, before anything is launched: there
+/// is no transaction for the two to share, so nothing is gained by waiting.
+pub async fn prepare_restore(
+    cfg: &ConnectionConfig,
+    database: &str,
+    server_major: u32,
+    source: &Path,
+    o: &RestoreOptions,
+    plain: bool,
+) -> AppResult<Restore> {
+    // A plain-SQL dump is applied by psql, a custom archive by pg_restore.
+    let tool = need(if plain { "psql" } else { "pg_restore" }, server_major)?;
+    let direct = |tool: &Tool| vec![Stage::new(tool, restore_args(database, source, o, plain))];
+    if !o.clean {
+        return Ok(Restore {
+            stages: direct(&tool),
+            tool,
+            replaced: Vec::new(),
+        });
+    }
+    if plain {
+        return Err(AppError::msg(
+            "A plain SQL backup cannot say what it contains, so there is no telling what to replace. Restore it into a new database, or turn replacing off.",
+        ));
+    }
+    let listing = list_archive(&tool, source).await?;
+    if !listing.has_structure {
+        return Err(AppError::msg(
+            "This backup carries rows only, so emptying the target would leave them nowhere to go. Turn replacing off to load them into the tables that are there.",
+        ));
+    }
+    let statements = pg::replacing(cfg, database, &listing.schemas).await?;
+    let stages = if o.single_transaction {
+        // Emptying and restoring have to be one transaction or a failed
+        // restore leaves an empty database behind, and only psql can be
+        // handed both.
+        let psql = need("psql", server_major)?;
+        let mut first = vec!["BEGIN".to_string(), pg::OPENING.to_string()];
+        first.extend(statements);
+        vec![
+            Stage::new(&tool, script_args(source, o)),
+            Stage::new(&psql, apply_args(database, &first.join("; "))),
+        ]
+    } else {
+        pg::run_atomically(cfg, database, &statements).await?;
+        direct(&tool)
+    };
+    Ok(Restore {
+        stages,
+        tool,
+        replaced: listing.schemas,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Running it
 // ---------------------------------------------------------------------------
@@ -607,6 +683,30 @@ pub enum JobState {
     Cancelled,
 }
 
+/// One part of a job made of several. A plain dump or restore has none; a
+/// transfer has one for each thing it does in turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StepState {
+    Pending,
+    Running,
+    Done,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Step {
+    pub key: &'static str,
+    pub state: StepState,
+    /// What there is to say about it: how far along, how much, or why not.
+    pub detail: Option<String>,
+    pub ms: Option<f64>,
+    #[serde(skip)]
+    started: Option<std::time::Instant>,
+}
+
 /// A dump or restore in flight. The frontend polls it, the same way the
 /// notification panel polls its channel, because the RPC surface has no way to
 /// push.
@@ -616,13 +716,18 @@ pub struct Job {
     /// What the tool printed, newest last. Capped so a long restore cannot
     /// grow without end.
     pub log: Vec<String>,
+    /// How many lines were ever logged, which the cap makes more than are kept.
+    lines: u64,
     pub error: Option<String>,
     pub started: std::time::Instant,
     pub finished_ms: Option<f64>,
     /// For a dump, how large the file is so far.
     pub bytes: u64,
     pub file: Option<String>,
-    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+    pub steps: Vec<Step>,
+    /// Whatever the job has to show for itself beyond having finished.
+    pub report: Option<Value>,
+    cancel: watch::Sender<bool>,
 }
 
 const LOG_CAPACITY: usize = 500;
@@ -638,6 +743,8 @@ impl Job {
             "elapsedMs": self.finished_ms.unwrap_or_else(|| self.started.elapsed().as_secs_f64() * 1000.0),
             "bytes": self.bytes,
             "file": self.file,
+            "steps": self.steps,
+            "report": self.report,
         })
     }
 }
@@ -657,11 +764,9 @@ impl Jobs {
     pub fn cancel(&self, id: &str) -> AppResult<()> {
         self.with(|m| {
             let job = m
-                .get_mut(id)
+                .get(id)
                 .ok_or_else(|| AppError::msg("That job is no longer running."))?;
-            if let Some(tx) = job.cancel.take() {
-                let _ = tx.send(());
-            }
+            let _ = job.cancel.send(true);
             Ok(())
         })
     }
@@ -670,6 +775,110 @@ impl Jobs {
     /// accumulate job records.
     pub fn sweep(&self) {
         self.with(|m| m.retain(|_, j| j.state == JobState::Running || j.started.elapsed().as_secs() < 3600));
+    }
+
+    /// Starts tracking a job, and hands back the signal that it was cancelled.
+    pub fn open(
+        &self,
+        kind: &'static str,
+        file: Option<String>,
+        steps: &[&'static str],
+    ) -> (String, watch::Receiver<bool>) {
+        let id = uuid::Uuid::new_v4().to_string();
+        let (cancel, cancelled) = watch::channel(false);
+        self.sweep();
+        self.with(|m| {
+            m.insert(
+                id.clone(),
+                Job {
+                    kind,
+                    state: JobState::Running,
+                    log: Vec::new(),
+                    lines: 0,
+                    error: None,
+                    started: std::time::Instant::now(),
+                    finished_ms: None,
+                    bytes: 0,
+                    file,
+                    steps: steps
+                        .iter()
+                        .map(|key| Step {
+                            key,
+                            state: StepState::Pending,
+                            detail: None,
+                            ms: None,
+                            started: None,
+                        })
+                        .collect(),
+                    report: None,
+                    cancel,
+                },
+            )
+        });
+        (id, cancelled)
+    }
+
+    pub fn update(&self, id: &str, f: impl FnOnce(&mut Job)) {
+        self.with(|m| {
+            if let Some(j) = m.get_mut(id) {
+                f(j)
+            }
+        })
+    }
+
+    pub fn say(&self, id: &str, line: String) {
+        self.update(id, |j| {
+            if j.log.len() >= LOG_CAPACITY {
+                j.log.remove(0);
+            }
+            j.log.push(line);
+            j.lines += 1;
+        });
+    }
+
+    /// Moves a step on. A `None` detail keeps whatever it was already saying.
+    pub fn step(&self, id: &str, key: &str, state: StepState, detail: Option<String>) {
+        self.update(id, |j| {
+            let Some(s) = j.steps.iter_mut().find(|s| s.key == key) else {
+                return;
+            };
+            if state == StepState::Running && s.started.is_none() {
+                s.started = Some(std::time::Instant::now());
+            }
+            if matches!(state, StepState::Done | StepState::Failed) {
+                s.ms = s.started.map(|t| t.elapsed().as_secs_f64() * 1000.0);
+            }
+            s.state = state;
+            if detail.is_some() {
+                s.detail = detail;
+            }
+        });
+    }
+
+    /// Closes whatever step was under way when the job stopped short.
+    pub fn settle(&self, id: &str, state: StepState) {
+        let open: Vec<&'static str> = self.with(|m| {
+            m.get(id)
+                .map(|j| {
+                    j.steps
+                        .iter()
+                        .filter(|s| s.state == StepState::Running)
+                        .map(|s| s.key)
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        for key in open {
+            self.step(id, key, state, None);
+        }
+    }
+
+    pub fn finish(&self, id: &str, state: JobState, error: Option<String>) {
+        self.update(id, |j| {
+            j.state = state;
+            j.finished_ms = Some(j.started.elapsed().as_secs_f64() * 1000.0);
+            j.error = error;
+        });
     }
 }
 
@@ -722,19 +931,16 @@ async fn wait_all(kind: &str, children: &mut [Child]) -> (JobState, Option<Strin
     }
 }
 
-/// Spawns the stages and streams their stderr into the job record. Returns the
-/// job id straight away; the frontend polls for the rest.
-pub async fn spawn(
-    jobs: Arc<Jobs>,
-    kind: &'static str,
-    stages: Vec<Stage>,
-    env: Vec<(String, String)>,
-    file: Option<String>,
-    watch_file: bool,
-) -> AppResult<String> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
+/// Resolves once the job has been cancelled, and never otherwise.
+pub async fn cancelled(signal: &mut watch::Receiver<bool>) {
+    if signal.wait_for(|asked| *asked).await.is_err() {
+        // Nobody is left who could ask.
+        std::future::pending::<()>().await;
+    }
+}
 
+/// Starts the stages, each one's stdout feeding the next one's stdin.
+pub fn launch(stages: &[Stage], env: &[(String, String)]) -> AppResult<Vec<Child>> {
     let mut children: Vec<Child> = Vec::new();
     let mut feed: Option<Stdio> = None;
     let last = stages.len().saturating_sub(1);
@@ -760,45 +966,59 @@ pub async fn spawn(
         }
         children.push(child);
     }
+    Ok(children)
+}
 
-    jobs.sweep();
-    jobs.with(|m| {
-        m.insert(
-            id.clone(),
-            Job {
-                kind,
-                state: JobState::Running,
-                log: Vec::new(),
-                error: None,
-                started: std::time::Instant::now(),
-                finished_ms: None,
-                bytes: 0,
-                file: file.clone(),
-                cancel: Some(cancel_tx),
-            },
-        )
-    });
+/// Asks the processes to stop, then makes them.
+///
+/// Asking comes first because of pg_dump's workers: they are processes of their
+/// own, and only a pg_dump that is told to stop takes them with it and cancels
+/// what they were running on the server. Killed outright it leaves each one
+/// copying its table to the end.
+async fn stop(children: &mut [Child]) {
+    #[cfg(unix)]
+    {
+        for child in children.iter() {
+            if let Some(pid) = child.id() {
+                // SAFETY: a signal to a process this one started and has not
+                // reaped, so the id cannot have been handed to another.
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            }
+        }
+        let all = async {
+            for child in children.iter_mut() {
+                let _ = child.wait().await;
+            }
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(3), all).await;
+    }
+    for child in children.iter_mut() {
+        let _ = child.kill().await;
+    }
+}
 
-    let job_id = id.clone();
-    let watched = file.clone();
+/// Sees the processes through, streaming what they say into the job's log, and
+/// reports how it ended. The job itself is left running: what that outcome
+/// means is the caller's to decide.
+pub async fn drive(
+    jobs: &Arc<Jobs>,
+    id: &str,
+    kind: &str,
+    mut children: Vec<Child>,
+    cancel: &mut watch::Receiver<bool>,
+) -> (JobState, Option<String>) {
+    let before = jobs.with(|m| m.get(id).map(|j| j.lines).unwrap_or(0));
 
     // Every stage's stderr, because that is where all of these tools talk.
     let mut readers = Vec::new();
     for child in children.iter_mut() {
         if let Some(err) = child.stderr.take() {
-            let jobs2 = jobs.clone();
-            let id2 = job_id.clone();
+            let jobs = jobs.clone();
+            let id = id.to_string();
             readers.push(tokio::spawn(async move {
                 let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    jobs2.with(|m| {
-                        if let Some(j) = m.get_mut(&id2) {
-                            if j.log.len() >= LOG_CAPACITY {
-                                j.log.remove(0);
-                            }
-                            j.log.push(line);
-                        }
-                    });
+                    jobs.say(&id, line);
                 }
             }));
         }
@@ -812,70 +1032,86 @@ pub async fn spawn(
         });
     }
 
+    let outcome = tokio::select! {
+        outcome = wait_all(kind, &mut children) => outcome,
+        _ = cancelled(cancel) => (JobState::Cancelled, None),
+    };
+    if outcome.0 == JobState::Cancelled {
+        stop(&mut children).await;
+    }
+
+    // A process can be gone before its last lines have been read, and
+    // those are the ones that say why.
+    for reader in readers {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), reader).await;
+    }
+
+    let error = outcome.1.map(|e| {
+        // The tool's own words say far more than an exit code. Only this
+        // run's: a job of several steps has earlier ones in the same log.
+        let said = jobs.with(|m| {
+            m.get(id)
+                .map(|j| {
+                    let fresh = (j.lines - before).min(j.log.len() as u64) as usize;
+                    last_words(&j.log[j.log.len() - fresh..])
+                })
+                .unwrap_or_default()
+        });
+        if said.is_empty() { e } else { format!("{e}\n{said}") }
+    });
+    (outcome.0, error)
+}
+
+/// Keeps a job's `bytes` in step with what is on disk until it is aborted.
+pub fn watch_size(jobs: Arc<Jobs>, id: String, path: PathBuf) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            let size = output_size(&path);
+            let still_running = jobs.with(|m| match m.get_mut(&id) {
+                Some(j) => {
+                    j.bytes = size;
+                    j.state == JobState::Running
+                }
+                None => false,
+            });
+            if !still_running {
+                break;
+            }
+        }
+    })
+}
+
+/// Spawns the stages and streams their stderr into the job record. Returns the
+/// job id straight away; the frontend polls for the rest.
+pub async fn spawn(
+    jobs: Arc<Jobs>,
+    kind: &'static str,
+    stages: Vec<Stage>,
+    env: Vec<(String, String)>,
+    file: Option<String>,
+    watch_file: bool,
+) -> AppResult<String> {
+    let children = launch(&stages, &env)?;
+    let (id, mut cancel) = jobs.open(kind, file.clone(), &[]);
+
+    let job_id = id.clone();
     tokio::spawn(async move {
         // While it runs, report how large the output has grown.
-        let ticker = if watch_file {
-            watched.clone().map(|path| {
-                let jobs3 = jobs.clone();
-                let id3 = job_id.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                        let size = output_size(Path::new(&path));
-                        let still_running = jobs3.with(|m| {
-                            if let Some(j) = m.get_mut(&id3) {
-                                j.bytes = size;
-                                j.state == JobState::Running
-                            } else {
-                                false
-                            }
-                        });
-                        if !still_running {
-                            break;
-                        }
-                    }
-                })
-            })
-        } else {
-            None
-        };
-
-        let outcome = tokio::select! {
-            outcome = wait_all(kind, &mut children) => outcome,
-            _ = &mut cancel_rx => (JobState::Cancelled, None),
-        };
-        if outcome.0 == JobState::Cancelled {
-            for child in children.iter_mut() {
-                let _ = child.kill().await;
-            }
-        }
-
-        // A process can be gone before its last lines have been read, and
-        // those are the ones that say why.
-        for reader in readers {
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), reader).await;
-        }
-
-        // Walked, not stat-ed: a directory's own metadata reports the size of
-        // the inode, not of what is inside it.
-        let size = watched.as_ref().map(|p| output_size(Path::new(p)));
-        jobs.with(|m| {
-            if let Some(j) = m.get_mut(&job_id) {
-                j.state = outcome.0;
-                j.finished_ms = Some(j.started.elapsed().as_secs_f64() * 1000.0);
-                if let Some(b) = size {
-                    j.bytes = b;
-                }
-                if let Some(e) = outcome.1 {
-                    // The tool's own words say far more than an exit code.
-                    let said = last_words(&j.log);
-                    j.error = Some(if said.is_empty() { e } else { format!("{e}\n{said}") });
-                }
-            }
-        });
+        let ticker = file
+            .clone()
+            .filter(|_| watch_file)
+            .map(|path| watch_size(jobs.clone(), job_id.clone(), PathBuf::from(path)));
+        let (state, error) = drive(&jobs, &job_id, kind, children, &mut cancel).await;
         if let Some(t) = ticker {
             t.abort();
         }
+        // Walked, not stat-ed: a directory's own metadata reports the size of
+        // the inode, not of what is inside it.
+        if let Some(size) = file.as_ref().map(|p| output_size(Path::new(p))) {
+            jobs.update(&job_id, |j| j.bytes = size);
+        }
+        jobs.finish(&job_id, state, error);
     });
 
     Ok(id)

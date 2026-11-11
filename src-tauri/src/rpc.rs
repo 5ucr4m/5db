@@ -15,6 +15,7 @@ use crate::pg::{self, Listener, PgSession};
 use crate::rds::{self, RedisSession};
 use crate::ssh::{self, Tunnel};
 use crate::store::{ConnectionConfig, NewHistory, SavedQuery, Store};
+use crate::transfer;
 
 /// The destination of a file write comes from the frontend, which gets it from
 /// the native save dialog. Validate it anyway, so that a compromised frontend
@@ -43,6 +44,41 @@ fn write_target(state: &AppState, path: &str) -> AppResult<PathBuf> {
         return Err(AppError::msg("Refusing to write inside 5db's own data directory."));
     }
     Ok(dir.join(name))
+}
+
+/// A folder something is about to be written into, held to the same rules as
+/// a file's destination.
+fn write_dir(state: &AppState, dir: &Path) -> AppResult<PathBuf> {
+    let probe = write_target(state, &dir.join("5db").to_string_lossy())?;
+    Ok(probe.parent().unwrap_or(dir).to_path_buf())
+}
+
+/// A connection marked read-only is a promise the driver keeps on every
+/// session it opens. pg_restore and psql open their own, where nothing keeps
+/// it, so it is kept here.
+fn writable(cfg: &ConnectionConfig) -> AppResult<()> {
+    if cfg.read_only {
+        return Err(AppError::msg(format!(
+            "{} is marked read-only, so nothing is restored into it. Turn that off on the connection first.",
+            cfg.name
+        )));
+    }
+    Ok(())
+}
+
+/// Whether two saved connections reach the same server, as far as what was
+/// typed into them can tell.
+fn same_server(a: &ConnectionConfig, b: &ConnectionConfig) -> bool {
+    let host = |c: &ConnectionConfig| {
+        if c.host.is_empty() {
+            "localhost".to_string()
+        } else {
+            c.host.to_ascii_lowercase()
+        }
+    };
+    let port = |c: &ConnectionConfig| if c.port == 0 { 5432 } else { c.port };
+    let via = |c: &ConnectionConfig| c.ssh_enabled.then(|| (c.ssh_host.to_ascii_lowercase(), c.ssh_port));
+    host(a) == host(b) && port(a) == port(b) && via(a) == via(b)
 }
 
 pub struct AppState {
@@ -483,77 +519,97 @@ pub async fn dispatch(state: &AppState, method: &str, params: Value) -> AppResul
             let connection_id: String = p(&params["connectionId"])?;
             let database: Option<String> = params["database"].as_str().map(str::to_string);
             let options: dump::RestoreOptions = p(&params["options"])?;
-            // A plain-SQL dump is applied by psql, a custom archive by pg_restore.
             let plain = params["plain"].as_bool().unwrap_or(false);
 
-            let name = if plain { "psql" } else { "pg_restore" };
-            let find = |name: &str| {
-                dump::find_tool(name).ok_or_else(|| {
-                    AppError::msg(format!(
-                        "{name} was not found on this machine. Install the PostgreSQL client tools."
-                    ))
-                })
-            };
-            let tool = find(name)?;
+            let cfg = state.store.get_connection(&connection_id)?;
+            writable(&cfg)?;
             let major = state.server_major(&connection_id, database.as_deref()).await?;
-            dump::check_version(&tool, major)?;
-
             let session = state.pg(&connection_id, database.as_deref()).await?;
             let target_db = session.database.clone();
-            let cfg = state.effective(state.store.get_connection(&connection_id)?).await?;
+            let cfg = state.effective(cfg).await?;
 
-            let mut replaced: Vec<String> = Vec::new();
-            let stages = if options.clean {
-                if plain {
-                    return Err(AppError::msg(
-                        "A plain SQL backup cannot say what it contains, so there is no telling what to replace. Restore it into a new database, or turn replacing off.",
-                    ));
-                }
-                let listing = dump::list_archive(&tool, &source).await?;
-                if !listing.has_structure {
-                    return Err(AppError::msg(
-                        "This backup carries rows only, so emptying the target would leave them nowhere to go. Turn replacing off to load them into the tables that are there.",
-                    ));
-                }
-                let statements = pg::replacing(&cfg, &target_db, &listing.schemas).await?;
-                replaced = listing.schemas;
-                if options.single_transaction {
-                    // Emptying and restoring have to be one transaction or a
-                    // failed restore leaves an empty database behind, and only
-                    // psql can be handed both.
-                    let psql = find("psql")?;
-                    dump::check_version(&psql, major)?;
-                    let mut first = vec!["BEGIN".to_string(), pg::OPENING.to_string()];
-                    first.extend(statements);
-                    vec![
-                        dump::Stage::new(&tool, dump::script_args(&source, &options)),
-                        dump::Stage::new(&psql, dump::apply_args(&target_db, &first.join("; "))),
-                    ]
-                } else {
-                    pg::run_atomically(&cfg, &target_db, &statements).await?;
-                    vec![dump::Stage::new(
-                        &tool,
-                        dump::restore_args(&target_db, &source, &options, plain),
-                    )]
-                }
-            } else {
-                vec![dump::Stage::new(
-                    &tool,
-                    dump::restore_args(&target_db, &source, &options, plain),
-                )]
-            };
+            let restore = dump::prepare_restore(&cfg, &target_db, major, &source, &options, plain).await?;
             let id = dump::spawn(
                 state.jobs.clone(),
                 "restore",
-                stages,
+                restore.stages,
                 dump::env_for(&cfg),
                 Some(source.display().to_string()),
                 false,
             )
             .await?;
             Ok(
-                json!({ "id": id, "tool": tool.path, "version": tool.version, "database": target_db, "replaced": replaced }),
+                json!({ "id": id, "tool": restore.tool.path, "version": restore.tool.version,
+                       "database": target_db, "replaced": restore.replaced }),
             )
+        }
+        "transfer.start" => {
+            let from: PgTarget = p(&params["source"])?;
+            let to: PgTarget = p(&params["target"])?;
+            let options: transfer::Options = p(&params["options"])?;
+
+            let from_cfg = state.store.get_connection(&from.connection_id)?;
+            let to_cfg = state.store.get_connection(&to.connection_id)?;
+            writable(&to_cfg)?;
+            let source_db = state
+                .pg(&from.connection_id, from.database.as_deref())
+                .await?
+                .database
+                .clone();
+            let target_db = state
+                .pg(&to.connection_id, to.database.as_deref())
+                .await?
+                .database
+                .clone();
+            if source_db == target_db && same_server(&from_cfg, &to_cfg) {
+                return Err(AppError::msg(
+                    "That is the database being copied. Pick another database, or another server.",
+                ));
+            }
+
+            // Everything that can be refused is refused now, not after a
+            // backup that may have taken an hour.
+            let source_major = state.server_major(&from.connection_id, Some(&source_db)).await?;
+            let target_major = state.server_major(&to.connection_id, Some(&target_db)).await?;
+            let pg_dump = dump::need("pg_dump", source_major)?;
+            dump::need("pg_restore", target_major)?;
+            if options.replace && options.single_transaction {
+                dump::need("psql", target_major)?;
+            }
+            let source_cfg = state.effective(from_cfg).await?;
+            let target_cfg = state.effective(to_cfg).await?;
+            if !options.replace {
+                let held = pg::user_relations(&target_cfg, &target_db).await?;
+                if held > 0 {
+                    return Err(AppError::msg(format!(
+                        "{target_db} already holds {held} tables, views or sequences, and a copy that replaces nothing would stop at the first one. Turn on replacing, or pick an empty database."
+                    )));
+                }
+            }
+
+            let base = match params["folder"].as_str().filter(|f| !f.is_empty()) {
+                Some(folder) => PathBuf::from(folder),
+                None => std::env::temp_dir(),
+            };
+            let plan = transfer::Plan {
+                source: transfer::Endpoint {
+                    cfg: source_cfg,
+                    database: source_db,
+                    major: source_major,
+                },
+                target: transfer::Endpoint {
+                    cfg: target_cfg,
+                    database: target_db.clone(),
+                    major: target_major,
+                },
+                options,
+                scratch: transfer::scratch(&write_dir(state, &base)?)?,
+                pg_dump: pg_dump.clone(),
+            };
+            let file = plan.archive().display().to_string();
+            let id = transfer::start(state.jobs.clone(), plan);
+            Ok(json!({ "id": id, "tool": pg_dump.path, "version": pg_dump.version,
+                       "database": target_db, "file": file }))
         }
         "dump.status" => {
             let id: String = p(&params["id"])?;

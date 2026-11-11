@@ -432,13 +432,14 @@ test("backup and restore: dump a database and put it on another target", async (
   // The connection says which server; the database is picked separately,
   // because a restore replays into one database and a migration usually wants
   // a fresh one.
-  await page.locator("main select").nth(0).selectOption(target.id);
-  await expect(page.getByText("Database on that server")).toBeVisible();
+  const form = page.getByRole("region", { name: "Restore onto another server" });
+  await form.locator("select").nth(0).selectOption(target.id);
+  await expect(form.getByText("Database on that server")).toBeVisible();
   const made = `e2e_made_here_${process.pid}`;
-  await page.getByPlaceholder(/or create one/).fill(made);
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  await expect(page.locator("main select").nth(1)).toHaveValue(made, { timeout: 20000 });
-  await page.getByRole("button", { name: "Restore", exact: true }).click();
+  await form.getByPlaceholder(/or create one/).fill(made);
+  await form.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(form.locator("select").nth(1)).toHaveValue(made, { timeout: 20000 });
+  await form.getByRole("button", { name: "Restore", exact: true }).click();
 
   // The app asks before writing to another server, and names what it will do.
   await expect(page.getByText(new RegExp(`will be applied to ${made}`))).toBeVisible();
@@ -462,6 +463,53 @@ test("backup and restore: dump a database and put it on another target", async (
     record: false,
     sql: `DROP DATABASE IF EXISTS ${made} WITH (FORCE)`,
   });
+});
+
+test("copy a database to another one in a single step", async ({ page }) => {
+  await addConnection(page, PG_URL, "Shop");
+  const source = (await rpc<{ id: string; name: string }[]>("connections.list")).find((c) => c.name === "Shop");
+  const made = `e2e_copied_${process.pid}`;
+  const admin = (sql: string) => rpc("pg.execute", { connectionId: source?.id, database: "postgres", record: false, sql });
+  await admin(`DROP DATABASE IF EXISTS ${made} WITH (FORCE)`);
+
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.getByPlaceholder(/Jump to a table/).fill("backup");
+  await page.getByText("Backup and restore").click();
+
+  const form = page.getByRole("region", { name: "Copy this database to another server" });
+  await form
+    .locator("select")
+    .nth(0)
+    .selectOption(source?.id ?? "");
+  // The connection's own database is the one being copied, which is refused
+  // on the spot rather than after a backup.
+  await expect(form.getByText("That is the database being copied")).toBeVisible();
+  await form.getByPlaceholder(/or create one/).fill(made);
+  await form.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(form.locator("select").nth(1)).toHaveValue(made, { timeout: 20000 });
+  await form.getByRole("button", { name: `Copy to ${made} on Shop` }).click();
+
+  // It says what is about to be written where before doing it.
+  await expect(page.getByText(new RegExp(`will be copied into ${made}`))).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Copy", exact: true }).click();
+
+  const progress = page.getByRole("region", { name: "Progress" });
+  await expect(progress.getByText("Copy finished")).toBeVisible({ timeout: 120000 });
+  // Every step is accounted for, and the comparison says what it compared.
+  for (const step of ["Back up the source", "Restore into the target", "Compare every table", "Collect statistics", "Delete the backup"])
+    await expect(progress.getByText(step)).toBeVisible();
+  await expect(progress.getByText(/tables, [\d,]+ rows, all of them there/)).toBeVisible();
+  await expect(progress.getByText(/^freed /)).toBeVisible();
+
+  // And the rows really are on the other side.
+  const check = await rpc<{ results: { rows: string[][] }[] }>("pg.execute", {
+    connectionId: source?.id,
+    database: made,
+    record: false,
+    sql: "SELECT count(*)::text FROM orders",
+  });
+  expect(check.results[0].rows[0][0]).toBe("20000");
+  await admin(`DROP DATABASE IF EXISTS ${made} WITH (FORCE)`);
 });
 
 test("create a database from the switcher", async ({ page }) => {
