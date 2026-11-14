@@ -6,6 +6,8 @@ All notable changes to 5db. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-11-14
+
 ### Changed
 
 - Connection secrets are kept in a single keychain item instead of one per
